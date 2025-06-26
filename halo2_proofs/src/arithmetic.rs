@@ -38,7 +38,8 @@ use std::path::Path;
 use serde::Serialize;
 use std::time::Instant;
 use std::error::Error;
-
+use std::env;
+use std::path::{PathBuf};
 #[derive(Serialize, Debug)]
 struct FFTLoggingInfo {     
     size: u32,
@@ -69,20 +70,24 @@ struct MSMLoggingInfo {
 
 fn log_fft_stats(stat_collector:FFTLoggingInfo)-> Result<(), Box<dyn Error>>
 {  
-    let filename = "halo2_ffts.csv";
-    let file_exists = Path::new(filename).exists();
+    // let filename = "halo2_ffts.csv";
+    let log_dir = env::var("EZKL_LOG_DIR").unwrap_or_else(|_| ".".to_string());
+    std::fs::create_dir_all(&log_dir).ok();
+    let csv_path = PathBuf::from(&log_dir).join("halo2_ffts.csv");
+    let file_exists = csv_path.exists();
     // Open the file in append mode, create it if it does not exist
+    // Open the file in append mode, create if it does not exist
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .append(true)
-        .open(filename)?;
+        .open(&csv_path)?;
 
-    // Create a CSV writer
-    let mut wtr = Writer::from_writer(file);
+     // Create a CSV writer
+    let mut wtr = csv::Writer::from_writer(file);
 
 
-    if !file_exists {
+   if !file_exists {
         wtr.write_record(&["size", "log_n", "device", "duration(s)"])?;
     }
     // Write the record with proper type conversion
@@ -99,36 +104,38 @@ fn log_fft_stats(stat_collector:FFTLoggingInfo)-> Result<(), Box<dyn Error>>
 
 fn log_msm_stats(stat_collector:MSMLoggingInfo)-> Result<(), Box<dyn Error>>
 {   
-    let filename = "halo2_msms.csv";
-    let file_exists = Path::new(filename).exists();
-    // Open or create the file
+    // let filename = "halo2_msms.csv";
+    // Read log directory from env var, default to "."
+    let log_dir = env::var("EZKL_LOG_DIR").unwrap_or_else(|_| ".".to_string());
+    std::fs::create_dir_all(&log_dir).ok();
+
+    let csv_path = PathBuf::from(&log_dir).join("halo2_msms.csv");
+    let file_exists = csv_path.exists();
+      // Open or create the file
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .append(true)
-        .open(filename)?;
+        .open(&csv_path)?;
     // Create a CSV writer
-      
     let mut wtr = csv::Writer::from_writer(file);
 
-      // Write header if the file does not already exist
-      if !file_exists {
-          wtr.write_record(&["num_coeffs", "device", "duration(s)"])?;
-      }
-    
+    // Write header if the file does not already exist
+    if !file_exists {
+        wtr.write_record(&["num_coeffs", "device", "duration(s)"])?;
+    }
+
     // Write the logging information
     wtr.write_record(&[
         &stat_collector.num_coeffs.to_string(),
         &stat_collector.device.to_string(),
         &stat_collector.msm_duration.to_string(),
-
-
     ])?;
+
     // Ensure all data is written to the file
     wtr.flush()?;
     Ok(())
 }
-
 
 
 /// This represents an element of a group with basic operations that can be
@@ -333,6 +340,7 @@ pub fn cpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cur
 
 }
 
+#[cfg(feature = "gpu")]
 pub fn gpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> Result<C::Curve, ec_gpu_gen::EcError>{
 
     assert_eq!(coeffs.len(), bases.len());
@@ -398,6 +406,7 @@ pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, 
     cpu_fft(a, omega, log_n);
 }
 
+#[cfg(feature = "gpu")]
 pub fn gpu_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
     
     let mut stat_collector = FFTLoggingInfo::new(

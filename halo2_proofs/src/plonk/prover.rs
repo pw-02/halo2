@@ -1,5 +1,7 @@
 use ff::{Field, FromUniformBytes, WithSmallOrderMulGroup};
 use group::Curve;
+use crate::profiler::Profiler;
+
 use rand_core::RngCore;
 use std::collections::{BTreeSet, HashSet};
 use std::ops::RangeTo;
@@ -22,10 +24,11 @@ use super::mv_lookup as lookup;
 
 use csv::Writer;
 use std::path::Path;
-use serde::Serialize;
 use std::time::Instant;
+use std::env;
+use std::path::{PathBuf};
 
-#[derive(Serialize, Debug)]
+// #[derive(Serialize, Debug)]
 
 /*
 witness_collection
@@ -47,118 +50,191 @@ eval_shuffles
 query_instance
 create_proof */
 
-struct ProverLoggingInfo {    
-    // total_time: f64, 
-    witness_collection: f64,
-    construct_and_commit_to_lookup_permuted_values: f64,
-    commit_to_permutations: f64,
-    construct_and_comit_to_lookup_products: f64,
-    shuffles: f64,
-    commit_vanishing_argument_random_poly: f64,
-    calc_advice_polys: f64,
-    eval_h_x_poly: f64,
-    h_x_pieces_commitments: f64,
-    compute_and_hash_instance_evals: f64,
-    compute_and_hash_advice_evals: f64,
-    compute_and_hash_fixed_evals: f64,
-    eval_vanishing: f64,
-    eval_permutations: f64,
-    eval_lookups: f64,
-    eval_shuffles: f64,
-    query_instance: f64,
-    create_proof: f64
+#[derive(Default)]
+#[derive(Debug)]
+pub struct ProverLoggingInfo {
+    pub phases: HashMap<String, (f64, f32)>, // key = phase name, (wall_time_secs, cpu_usage %)
 }
 
 impl ProverLoggingInfo {
-    fn new() -> Self {
-        ProverLoggingInfo {
-            // total_time: 0.0,
-            witness_collection: 0.0,
-            construct_and_commit_to_lookup_permuted_values: 0.0,
-            commit_to_permutations: 0.0,
-            construct_and_comit_to_lookup_products: 0.0,
-            shuffles: 0.0,
-            commit_vanishing_argument_random_poly: 0.0,
-            calc_advice_polys: 0.0,
-            eval_h_x_poly: 0.0,
-            h_x_pieces_commitments: 0.0,
-            compute_and_hash_instance_evals: 0.0,
-            compute_and_hash_advice_evals: 0.0,
-            compute_and_hash_fixed_evals: 0.0,
-            eval_vanishing: 0.0,
-            eval_permutations: 0.0,
-            eval_lookups: 0.0,
-            eval_shuffles: 0.0,
-            query_instance: 0.0,
-            create_proof: 0.0
-        }
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn insert(&mut self, name: &str, time: f64, cpu: f32) {
+        self.phases.insert(name.to_string(), (time, cpu));
+    }
+
+    pub fn get_time(&self, name: &str) -> f64 {
+        self.phases.get(name).map(|(t, _)| *t).unwrap_or(0.0)
+    }
+
+    pub fn get_cpu(&self, name: &str) -> f32 {
+        self.phases.get(name).map(|(_, c)| *c).unwrap_or(0.0)
+    }
+
+    pub fn list_phases(&self) -> Vec<&String> {
+        let mut keys: Vec<&String> = self.phases.keys().collect();
+        keys.sort();
+        keys
     }
 }
 
-fn log_prover_stats(stat_collector:ProverLoggingInfo)-> Result<(), Box<dyn std::error::Error>>
-{  
-    let filename = "halo2_prover.csv";
-    let file_exists = Path::new(filename).exists();
-    // Open the file in append mode, create it if it does not exist
+fn log_prover_stats(stat_collector: ProverLoggingInfo) -> Result<(), Box<dyn std::error::Error>> {
+    // let filename: &'static str = "halo2_prover_cpu.csv";
+    let log_dir = env::var("EZKL_LOG_DIR").unwrap_or_else(|_| ".".to_string());
+    std::fs::create_dir_all(&log_dir).ok();
+
+    let csv_path = PathBuf::from(&log_dir).join("halo2_prover_cpu.csv");
+    let file_exists = csv_path.exists();
+
     let file = std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .append(true)
-        .open(filename)?;
+        .open(&csv_path)?;
 
-    // Create a CSV writer
     let mut wtr = Writer::from_writer(file);
 
+    let phases = stat_collector.list_phases();
+
     if !file_exists {
-        // Write the header record
-        wtr.write_record(&[ 
-            // "total_time",
-            "witness_collection",
-            "construct_and_commit_to_lookup_permuted_values",
-            "commit_to_permutations",
-            "construct_and_comit_to_lookup_products",
-            "shuffles",
-            "commit_vanishing_argument_random_poly",
-            "calc_advice_polys",
-            "eval_h_x_poly",
-            "h_x_pieces_commitments",
-            "compute_and_hash_instance_evals",
-            "compute_and_hash_advice_evals",
-            "compute_and_hash_fixed_evals",
-            "eval_vanishing",
-            "eval_permutations",
-            "eval_lookups",
-            "eval_shuffles",
-            "query_instance",
-            "create_proof"
-        ])?;
+        // Write headers
+        let mut header = Vec::new();
+        for name in &phases {
+            header.push(format!("{name}_time"));
+            header.push(format!("{name}_cpu"));
+        }
+        wtr.write_record(&header)?;
     }
-    // Write the record with proper type conversion
-    wtr.write_record(&[
-        // stat_collector.total_time.to_string(),
-        stat_collector.witness_collection.to_string(),
-        stat_collector.construct_and_commit_to_lookup_permuted_values.to_string(),
-        stat_collector.commit_to_permutations.to_string(),
-        stat_collector.construct_and_comit_to_lookup_products.to_string(),
-        stat_collector.shuffles.to_string(),
-        stat_collector.commit_vanishing_argument_random_poly.to_string(),
-        stat_collector.calc_advice_polys.to_string(),
-        stat_collector.eval_h_x_poly.to_string(),
-        stat_collector.h_x_pieces_commitments.to_string(),
-        stat_collector.compute_and_hash_instance_evals.to_string(),
-        stat_collector.compute_and_hash_advice_evals.to_string(),
-        stat_collector.compute_and_hash_fixed_evals.to_string(),
-        stat_collector.eval_vanishing.to_string(),
-        stat_collector.eval_permutations.to_string(),
-        stat_collector.eval_lookups.to_string(),
-        stat_collector.eval_shuffles.to_string(),
-        stat_collector.query_instance.to_string(),
-        stat_collector.create_proof.to_string(),
-    ])?;
+
+    // Write the actual values
+    let mut record = Vec::new();
+    for name in &phases {
+        record.push(format!("{:.6}", stat_collector.get_time(name)));
+        record.push(format!("{:.2}", stat_collector.get_cpu(name)));
+    }
+
+    wtr.write_record(&record)?;
     wtr.flush()?;
     Ok(())
- 
 }
+
+
+
+
+// struct ProverLoggingInfo {    
+//     // total_time: f64, 
+//     witness_collection: f64,
+//     construct_and_commit_to_lookup_permuted_values: f64,
+//     commit_to_permutations: f64,
+//     construct_and_comit_to_lookup_products: f64,
+//     shuffles: f64,
+//     commit_vanishing_argument_random_poly: f64,
+//     calc_advice_polys: f64,
+//     eval_h_x_poly: f64,
+//     h_x_pieces_commitments: f64,
+//     compute_and_hash_instance_evals: f64,
+//     compute_and_hash_advice_evals: f64,
+//     compute_and_hash_fixed_evals: f64,
+//     eval_vanishing: f64,
+//     eval_permutations: f64,
+//     eval_lookups: f64,
+//     eval_shuffles: f64,
+//     query_instance: f64,
+//     create_proof: f64
+// }
+
+// impl ProverLoggingInfo {
+//     fn new() -> Self {
+//         ProverLoggingInfo {
+//             // total_time: 0.0,
+//             witness_collection: 0.0,
+//             construct_and_commit_to_lookup_permuted_values: 0.0,
+//             commit_to_permutations: 0.0,
+//             construct_and_comit_to_lookup_products: 0.0,
+//             shuffles: 0.0,
+//             commit_vanishing_argument_random_poly: 0.0,
+//             calc_advice_polys: 0.0,
+//             eval_h_x_poly: 0.0,
+//             h_x_pieces_commitments: 0.0,
+//             compute_and_hash_instance_evals: 0.0,
+//             compute_and_hash_advice_evals: 0.0,
+//             compute_and_hash_fixed_evals: 0.0,
+//             eval_vanishing: 0.0,
+//             eval_permutations: 0.0,
+//             eval_lookups: 0.0,
+//             eval_shuffles: 0.0,
+//             query_instance: 0.0,
+//             create_proof: 0.0
+//         }
+//     }
+// }
+
+// fn log_prover_stats(stat_collector:ProverLoggingInfo)-> Result<(), Box<dyn std::error::Error>>
+// {  
+//     let filename = "halo2_prover.csv";
+//     let file_exists = Path::new(filename).exists();
+//     // Open the file in append mode, create it if it does not exist
+//     let file = std::fs::OpenOptions::new()
+//         .write(true)
+//         .create(true)
+//         .append(true)
+//         .open(filename)?;
+
+//     // Create a CSV writer
+//     let mut wtr = Writer::from_writer(file);
+
+//     if !file_exists {
+//         // Write the header record
+//         wtr.write_record(&[ 
+//             // "total_time",
+//             "witness_collection",
+//             "construct_and_commit_to_lookup_permuted_values",
+//             "commit_to_permutations",
+//             "construct_and_comit_to_lookup_products",
+//             "shuffles",
+//             "commit_vanishing_argument_random_poly",
+//             "calc_advice_polys",
+//             "eval_h_x_poly",
+//             "h_x_pieces_commitments",
+//             "compute_and_hash_instance_evals",
+//             "compute_and_hash_advice_evals",
+//             "compute_and_hash_fixed_evals",
+//             "eval_vanishing",
+//             "eval_permutations",
+//             "eval_lookups",
+//             "eval_shuffles",
+//             "query_instance",
+//             "create_proof"
+//         ])?;
+//     }
+//     // Write the record with proper type conversion
+//     wtr.write_record(&[
+//         // stat_collector.total_time.to_string(),
+//         stat_collector.witness_collection.to_string(),
+//         stat_collector.construct_and_commit_to_lookup_permuted_values.to_string(),
+//         stat_collector.commit_to_permutations.to_string(),
+//         stat_collector.construct_and_comit_to_lookup_products.to_string(),
+//         stat_collector.shuffles.to_string(),
+//         stat_collector.commit_vanishing_argument_random_poly.to_string(),
+//         stat_collector.calc_advice_polys.to_string(),
+//         stat_collector.eval_h_x_poly.to_string(),
+//         stat_collector.h_x_pieces_commitments.to_string(),
+//         stat_collector.compute_and_hash_instance_evals.to_string(),
+//         stat_collector.compute_and_hash_advice_evals.to_string(),
+//         stat_collector.compute_and_hash_fixed_evals.to_string(),
+//         stat_collector.eval_vanishing.to_string(),
+//         stat_collector.eval_permutations.to_string(),
+//         stat_collector.eval_lookups.to_string(),
+//         stat_collector.eval_shuffles.to_string(),
+//         stat_collector.query_instance.to_string(),
+//         stat_collector.create_proof.to_string(),
+//     ])?;
+//     wtr.flush()?;
+//     Ok(())
+ 
+// }
 
 
 use crate::{
@@ -199,8 +275,10 @@ pub fn create_proof<
 where
     Scheme::Scalar: WithSmallOrderMulGroup<3> + FromUniformBytes<64>,
 {
+    let mut profiler = Profiler::new();
     let mut stat_collector = ProverLoggingInfo::new();
-    let prover_start_time = Instant::now();
+
+  
 
     #[cfg(feature = "counter")]
     {
@@ -447,9 +525,12 @@ where
         }
     }
     
-    let start_time = Instant::now();
 
-    let (advice, challenges) = {
+    let (advice, challenges): (Vec<_>, Vec<_>) = profiler.measure_result::<(Vec<_>, Vec<_>), Error>(
+    "Commit to permutations",
+    &mut stat_collector,
+    "commit_to_permutations",
+    || {
         let mut advice = vec![
             AdviceSingle::<Scheme::Curve, LagrangeCoeff> {
                 advice_polys: vec![domain.empty_lagrange(); meta.num_advice_columns],
@@ -578,19 +659,24 @@ where
             .map(|index| challenges.remove(&index).unwrap())
             .collect::<Vec<_>>();
 
-        (advice, challenges)
-    };
+         Ok((advice, challenges))
+    },
+    )?;
 
-    stat_collector.witness_collection = start_time.elapsed().as_secs_f64();
+    // stat_collector.witness_collection = start_time.elapsed().as_secs_f64();
 
 
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
     
-    let start_time = Instant::now();
+    // let start_time = Instant::now();
 
     #[cfg(feature = "mv-lookup")]
-    let lookups: Vec<Vec<lookup::prover::Prepared<Scheme::Curve>>> = instance
+    let lookups: Vec<Vec<lookup::prover::Prepared<Scheme::Curve>>> = profiler.measure_result(
+    "prepare_lookup_permuted",
+    &mut stat_collector,
+    "construct_and_commit_to_lookup_permuted_values",
+    || {instance
         .iter()
         .zip(advice.iter())
         .map(|(instance, advice)| -> Result<Vec<_>, Error> {
@@ -615,7 +701,9 @@ where
                 })
                 .collect()
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+    },
+    )?;
 
     #[cfg(not(feature = "mv-lookup"))]
     let lookups: Vec<Vec<lookup::prover::Permuted<Scheme::Curve>>> = instance
@@ -645,7 +733,7 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    stat_collector.construct_and_commit_to_lookup_permuted_values = start_time.elapsed().as_secs_f64();
+    // stat_collector.construct_and_commit_to_lookup_permuted_values = start_time.elapsed().as_secs_f64();
 
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
@@ -653,9 +741,12 @@ where
     // Sample gamma challenge
     let gamma: ChallengeGamma<_> = transcript.squeeze_challenge_scalar();
 
-    let start_time = Instant::now();
     // Commit to permutations.
-    let permutations: Vec<permutation::prover::Committed<Scheme::Curve>> = instance
+    let permutations: Vec<permutation::prover::Committed<Scheme::Curve>> =  profiler.measure_result(
+    "commit_permutations",
+    &mut stat_collector,
+    "commit_to_permutations",
+    || {instance
         .iter()
         .zip(advice.iter())
         .map(|(instance, advice)| {
@@ -672,11 +763,13 @@ where
                 transcript,
             )
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+    },
+    )?;
 
-    stat_collector.commit_to_permutations = start_time.elapsed().as_secs_f64();
+    // stat_collector.commit_to_permutations = start_time.elapsed().as_secs_f64();
 
-    let start_time = Instant::now();
+    // let start_time = Instant::now();
 
     #[cfg(feature = "mv-lookup")]
     let lookups: Vec<Vec<lookup::prover::Committed<Scheme::Curve>>> = lookups
@@ -702,10 +795,13 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    stat_collector.construct_and_comit_to_lookup_products = start_time.elapsed().as_secs_f64();
-    let start_time = Instant::now();
+    // stat_collector.construct_and_comit_to_lookup_products = start_time.elapsed().as_secs_f64();
 
-    let shuffles: Vec<Vec<shuffle::prover::Committed<Scheme::Curve>>> = instance
+    let shuffles: Vec<Vec<shuffle::prover::Committed<Scheme::Curve>>> = profiler.measure_result(
+    "commit_shuffles",
+    &mut stat_collector,
+    "shuffles",
+    || {instance
         .iter()
         .zip(advice.iter())
         .map(|(instance, advice)| -> Result<Vec<_>, _> {
@@ -731,126 +827,196 @@ where
                 })
                 .collect::<Result<Vec<_>, _>>()
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+    },
+    )?;
     
-    stat_collector.shuffles = start_time.elapsed().as_secs_f64();
+    // stat_collector.shuffles = start_time.elapsed().as_secs_f64();
 
-    let start_time = Instant::now();
 
     // Commit to the vanishing argument's random polynomial for blinding h(x_3)
-    let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
-    
-    stat_collector.commit_vanishing_argument_random_poly = start_time.elapsed().as_secs_f64();
+    // let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
+    let vanishing = profiler.measure_result(
+    "commit_vanishing_argument",
+    &mut stat_collector,
+    "commit_vanishing_argument_random_poly",
+    || {
+        vanishing::Argument::commit(params, domain, &mut rng, transcript)
+    },)?;
+    // stat_collector.commit_vanishing_argument_random_poly = start_time.elapsed().as_secs_f64();
 
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
     
-    let start_time = Instant::now();
 
     // Calculate the advice polys
     let advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
         .into_iter()
         .map(
             |AdviceSingle {
-                 advice_polys,
-                 advice_blinds,
-             }| {
+                advice_polys,
+                advice_blinds,
+            }| {
                 AdviceSingle {
                     advice_polys: advice_polys
                         .into_iter()
                         .map(|poly| domain.lagrange_to_coeff(poly))
-                        .collect::<Vec<_>>(),
+                        .collect(),
                     advice_blinds,
                 }
             },
         )
         .collect();
+
+
     
-    stat_collector.calc_advice_polys = start_time.elapsed().as_secs_f64();
-    let start_time = Instant::now();
+    // stat_collector.calc_advice_polys = start_time.elapsed().as_secs_f64();
 
     // Evaluate the h(X) polynomial
-    let h_poly = pk.ev.evaluate_h(
-        pk,
-        &advice
-            .iter()
-            .map(|a| a.advice_polys.as_slice())
-            .collect::<Vec<_>>(),
-        &instance
-            .iter()
-            .map(|i| i.instance_polys.as_slice())
-            .collect::<Vec<_>>(),
-        &challenges,
-        *y,
-        *beta,
-        *gamma,
-        *theta,
-        &lookups,
-        &shuffles,
-        &permutations,
-    );
+    let h_poly = profiler.measure(
+    "eval_h_x_poly",
+    &mut stat_collector,
+    "eval_h_x_poly",
+    || {
+        pk.ev.evaluate_h(
+            pk,
+            &advice.iter().map(|a| a.advice_polys.as_slice()).collect::<Vec<_>>(),
+            &instance.iter().map(|i| i.instance_polys.as_slice()).collect::<Vec<_>>(),
+            &challenges,
+            *y,
+            *beta,
+            *gamma,
+            *theta,
+            &lookups,
+            &shuffles,
+            &permutations,
+        )
+    },
+);
 
-    stat_collector.eval_h_x_poly = start_time.elapsed().as_secs_f64();
+    // stat_collector.eval_h_x_poly = start_time.elapsed().as_secs_f64();
 
-    let start_time = Instant::now();
     // Construct the vanishing argument's h(X) commitments
-    let vanishing = vanishing.construct(params, domain, h_poly, &mut rng, transcript)?;
-    stat_collector.h_x_pieces_commitments = start_time.elapsed().as_secs_f64();
+    // let vanishing = vanishing.construct(params, domain, h_poly, &mut rng, transcript)?;
+    // stat_collector.h_x_pieces_commitments = start_time.elapsed().as_secs_f64();
+    
+    let vanishing = profiler.measure_result(
+    "construct_h_x_commitments",
+    &mut stat_collector,
+    "h_x_pieces_commitments",
+    || vanishing.construct(params, domain, h_poly, &mut rng, transcript),
+    )?;
+
 
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n()]);
     
-    let start_time = Instant::now();
-    if P::QUERY_INSTANCE {
-        // Compute and hash instance evals for each circuit instance
-        for instance in instance.iter() {
-            // Evaluate polynomials at omega^i x
-            let instance_evals: Vec<_> = meta
-                .instance_queries
+   profiler.measure_result::<(), Error>(
+    "compute_and_hash_instance_evals",
+    &mut stat_collector,
+    "compute_and_hash_instance_evals",
+    || {
+        if P::QUERY_INSTANCE {
+            for instance in instance.iter() {
+                let instance_evals: Vec<_> = meta
+                    .instance_queries
+                    .iter()
+                    .map(|&(column, at)| {
+                        eval_polynomial(
+                            &instance.instance_polys[column.index()],
+                            domain.rotate_omega(*x, at),
+                        )
+                    })
+                    .collect();
+
+                for eval in instance_evals.iter() {
+                    transcript.write_scalar(*eval)?; // ← this must return a compatible Error
+                }
+            }
+        }
+        Ok(())
+    },
+)?;
+
+
+
+    /* 
+    // let start_time = Instant::now();
+    // if P::QUERY_INSTANCE {
+    //     // Compute and hash instance evals for each circuit instance
+    //     for instance in instance.iter() {
+    //         // Evaluate polynomials at omega^i x
+    //         let instance_evals: Vec<_> = meta
+    //             .instance_queries
+    //             .iter()
+    //             .map(|&(column, at)| {
+    //                 eval_polynomial(
+    //                     &instance.instance_polys[column.index()],
+    //                     domain.rotate_omega(*x, at),
+    //                 )
+    //             })
+    //             .collect();
+
+    //         // Hash each instance column evaluation
+    //         for eval in instance_evals.iter() {
+    //             transcript.write_scalar(*eval)?;
+    //         }
+    //     }
+    // }
+    // stat_collector.compute_and_hash_instance_evals = start_time.elapsed().as_secs_f64();
+    */
+
+   profiler.measure_result::<(), Error>(
+    "compute_and_hash_advice_evals",
+    &mut stat_collector,
+    "compute_and_hash_advice_evals",
+    || {
+        for advice in advice.iter() {
+            let advice_evals: Vec<_> = meta
+                .advice_queries
                 .iter()
                 .map(|&(column, at)| {
                     eval_polynomial(
-                        &instance.instance_polys[column.index()],
+                        &advice.advice_polys[column.index()],
                         domain.rotate_omega(*x, at),
                     )
                 })
                 .collect();
 
-            // Hash each instance column evaluation
-            for eval in instance_evals.iter() {
-                transcript.write_scalar(*eval)?;
+            for eval in advice_evals.iter() {
+                transcript.write_scalar(*eval)?; // this can fail, so we need Ok(())
             }
         }
-    }
-    stat_collector.compute_and_hash_instance_evals = start_time.elapsed().as_secs_f64();
-
-    let start_time = Instant::now();
-
-    // Compute and hash advice evals for each circuit instance
-    for advice in advice.iter() {
-        // Evaluate polynomials at omega^i x
-        let advice_evals: Vec<_> = meta
-            .advice_queries
-            .iter()
-            .map(|&(column, at)| {
-                eval_polynomial(
-                    &advice.advice_polys[column.index()],
-                    domain.rotate_omega(*x, at),
-                )
-            })
-            .collect();
-
-        // Hash each advice column evaluation
-        for eval in advice_evals.iter() {
-            transcript.write_scalar(*eval)?;
-        }
-    }
-    stat_collector.compute_and_hash_advice_evals = start_time.elapsed().as_secs_f64();
+        Ok(())
+    },
+)?;
 
 
-    let start_time = Instant::now();
 
-    // Compute and hash fixed evals (shared across all circuit instances)
+    // // Compute and hash advice evals for each circuit instance
+    // for advice in advice.iter() {
+    //     // Evaluate polynomials at omega^i x
+    //     let advice_evals: Vec<_> = meta
+    //         .advice_queries
+    //         .iter()
+    //         .map(|&(column, at)| {
+    //             eval_polynomial(
+    //                 &advice.advice_polys[column.index()],
+    //                 domain.rotate_omega(*x, at),
+    //             )
+    //         })
+    //         .collect();
+
+    //     // Hash each advice column evaluation
+    //     for eval in advice_evals.iter() {
+    //         transcript.write_scalar(*eval)?;
+    //     }
+    // }
+    // stat_collector.compute_and_hash_advice_evals = start_time.elapsed().as_secs_f64();
+
+
+
+      // Compute and hash fixed evals (shared across all circuit instances)
     let fixed_evals: Vec<_> = meta
         .fixed_queries
         .iter()
@@ -863,29 +1029,68 @@ where
     for eval in fixed_evals.iter() {
         transcript.write_scalar(*eval)?;
     }
-    stat_collector.compute_and_hash_fixed_evals = start_time.elapsed().as_secs_f64();
+    // stat_collector.compute_and_hash_fixed_evals = start_time.elapsed().as_secs_f64();
 
-    let start_time = Instant::now();
+    let vanishing = profiler.measure_result(
+    "eval_vanishing",
+    &mut stat_collector,
+    "eval_vanishing",
+    || {
+        vanishing.evaluate(x, xn, domain, transcript)
+    },)?;
 
-    let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
-   
-    stat_collector.eval_vanishing = start_time.elapsed().as_secs_f64();
-
-    let start_time = Instant::now();
-
-    // Evaluate common permutation data
-    pk.permutation.evaluate(x, transcript)?;
-
-    // Evaluate the permutations, if any, at omega^i x.
-    let permutations: Vec<permutation::prover::Evaluated<Scheme::Curve>> = permutations
-        .into_iter()
-        .map(|permutation| -> Result<_, _> { permutation.construct().evaluate(pk, x, transcript) })
-        .collect::<Result<Vec<_>, _>>()?;
-    stat_collector.eval_permutations = start_time.elapsed().as_secs_f64();
     
-    let start_time = Instant::now();
+    // let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
+   
+    // stat_collector.eval_vanishing = start_time.elapsed().as_secs_f64();
+
+
+    let permutations: Vec<permutation::prover::Evaluated<Scheme::Curve>> = profiler.measure_result(
+    "eval_permutations",
+    &mut stat_collector,
+    "eval_permutations",
+    || {
+        // First evaluate the shared permutation data
+        pk.permutation.evaluate(x, transcript)?;
+
+        // Then evaluate each permutation commitment
+        permutations
+            .into_iter()
+            .map(|permutation| permutation.construct().evaluate(pk, x, transcript))
+            .collect::<Result<Vec<_>, _>>()
+    },)?;
+
+
+    // // Evaluate common permutation data
+    // pk.permutation.evaluate(x, transcript)?;
+
+    // // Evaluate the permutations, if any, at omega^i x.
+    // let permutations: Vec<permutation::prover::Evaluated<Scheme::Curve>> = permutations
+    //     .into_iter()
+    //     .map(|permutation| -> Result<_, _> { permutation.construct().evaluate(pk, x, transcript) })
+    //     .collect::<Result<Vec<_>, _>>()?;
+    // stat_collector.eval_permutations = start_time.elapsed().as_secs_f64();
+    
+    let lookups: Vec<Vec<lookup::prover::Evaluated<Scheme::Curve>>> = profiler.measure_result(
+    "eval_lookups",
+    &mut stat_collector,
+    "eval_lookups",
+    || {
+        lookups
+            .into_iter()
+            .map(|lookups| {
+                lookups
+                    .into_iter()
+                    .map(|p| p.evaluate(pk, x, transcript))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+    },
+)?;
+
 
     // Evaluate the lookups, if any, at omega^i x.
+    /* 
     let lookups: Vec<Vec<lookup::prover::Evaluated<Scheme::Curve>>> = lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
@@ -895,12 +1100,11 @@ where
                 .collect::<Result<Vec<_>, _>>()
         })
         .collect::<Result<Vec<_>, _>>()?;
-    stat_collector.eval_lookups = start_time.elapsed().as_secs_f64();
+    stat_collector.eval_lookups = start_time.elapsed().as_secs_f64(); */
 
-    let start_time = Instant::now();
 
     // Evaluate the shuffles, if any, at omega^i x.
-    let shuffles: Vec<Vec<shuffle::prover::Evaluated<Scheme::Curve>>> = shuffles
+    /*let shuffles: Vec<Vec<shuffle::prover::Evaluated<Scheme::Curve>>> = shuffles
         .into_iter()
         .map(|shuffles| -> Result<Vec<_>, _> {
             shuffles
@@ -908,61 +1112,87 @@ where
                 .map(|p| p.evaluate(pk, x, transcript))
                 .collect::<Result<Vec<_>, _>>()
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()?; */
 
-    stat_collector.eval_shuffles = start_time.elapsed().as_secs_f64();
+    let shuffles: Vec<Vec<shuffle::prover::Evaluated<Scheme::Curve>>> = profiler.measure_result(
+    "eval_shuffles",
+    &mut stat_collector,
+    "eval_shuffles",
+    || {
+        shuffles
+            .into_iter()
+            .map(|shuffles| {
+                shuffles
+                    .into_iter()
+                    .map(|p| p.evaluate(pk, x, transcript))
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .collect::<Result<Vec<_>, _>>()
+    },)?;
+
+
+    // stat_collector.eval_shuffles = start_time.elapsed().as_secs_f64();
     
-    let start_time = Instant::now();
 
-    let instances = instance
-        .iter()
-        .zip(advice.iter())
-        .zip(permutations.iter())
-        .zip(lookups.iter())
-        .zip(shuffles.iter())
-        .flat_map(|((((instance, advice), permutation), lookups), shuffles)| {
-            iter::empty()
-                .chain(
-                    P::QUERY_INSTANCE
-                        .then_some(pk.vk.cs.instance_queries.iter().map(move |&(column, at)| {
-                            ProverQuery {
-                                point: domain.rotate_omega(*x, at),
-                                poly: &instance.instance_polys[column.index()],
-                                blind: Blind::default(),
-                            }
-                        }))
-                        .into_iter()
-                        .flatten(),
-                )
+    let instances: Vec<_> = profiler.measure_result::<Vec<_>, Error>(
+    "query_instance",
+    &mut stat_collector,
+    "query_instance",
+    || {
+        Ok(
+            instance
+                .iter()
+                .zip(advice.iter())
+                .zip(permutations.iter())
+                .zip(lookups.iter())
+                .zip(shuffles.iter())
+                .flat_map(|((((instance, advice), permutation), lookups), shuffles)| {
+                    iter::empty()
+                        .chain(
+                            P::QUERY_INSTANCE
+                                .then_some(pk.vk.cs.instance_queries.iter().map(move |&(column, at)| {
+                                    ProverQuery {
+                                        point: domain.rotate_omega(*x, at),
+                                        poly: &instance.instance_polys[column.index()],
+                                        blind: Blind::default(),
+                                    }
+                                }))
+                                .into_iter()
+                                .flatten(),
+                        )
+                        .chain(
+                            pk.vk
+                                .cs
+                                .advice_queries
+                                .iter()
+                                .map(move |&(column, at)| ProverQuery {
+                                    point: domain.rotate_omega(*x, at),
+                                    poly: &advice.advice_polys[column.index()],
+                                    blind: advice.advice_blinds[column.index()],
+                                }),
+                        )
+                        .chain(permutation.open(pk, x))
+                        .chain(lookups.iter().flat_map(move |p| p.open(pk, x)))
+                        .chain(shuffles.iter().flat_map(move |p| p.open(pk, x)))
+                })
                 .chain(
                     pk.vk
                         .cs
-                        .advice_queries
+                        .fixed_queries
                         .iter()
-                        .map(move |&(column, at)| ProverQuery {
+                        .map(|&(column, at)| ProverQuery {
                             point: domain.rotate_omega(*x, at),
-                            poly: &advice.advice_polys[column.index()],
-                            blind: advice.advice_blinds[column.index()],
+                            poly: &pk.fixed_polys[column.index()],
+                            blind: Blind::default(),
                         }),
                 )
-                .chain(permutation.open(pk, x))
-                .chain(lookups.iter().flat_map(move |p| p.open(pk, x)))
-                .chain(shuffles.iter().flat_map(move |p| p.open(pk, x)))
-        })
-        .chain(
-            pk.vk
-                .cs
-                .fixed_queries
-                .iter()
-                .map(|&(column, at)| ProverQuery {
-                    point: domain.rotate_omega(*x, at),
-                    poly: &pk.fixed_polys[column.index()],
-                    blind: Blind::default(),
-                }),
+                .chain(pk.permutation.open(x))
+                .chain(vanishing.open(x))
+                .collect() // <--- Convert the iterator to Vec<_>
         )
-        .chain(pk.permutation.open(x))
-        // We query the h(X) polynomial at x
-        .chain(vanishing.open(x));
+    },
+)?;
+
 
     #[cfg(feature = "counter")]
     {
@@ -975,17 +1205,23 @@ where
         *MSM_COUNTER.lock().unwrap() = BTreeMap::new();
         *FFT_COUNTER.lock().unwrap() = BTreeMap::new();
     }
-    stat_collector.query_instance = start_time.elapsed().as_secs_f64();
+    // stat_collector.query_instance = start_time.elapsed().as_secs_f64();
     
-    let start_time = Instant::now();
 
     let prover = P::new(params);
 
-    let proof_result  = prover
-        .create_proof(rng, transcript, instances)
-        .map_err(|_| Error::ConstraintSystemFailure);
+    let proof_result = profiler.measure_result(
+    "create_proof",
+    &mut stat_collector,
+    "create_proof",
+    || {
+        prover
+            .create_proof(rng, transcript, instances)
+            .map_err(|_| Error::ConstraintSystemFailure)
+    },)?;
+
     
-    stat_collector.create_proof = start_time.elapsed().as_secs_f64();
+    // stat_collector.create_proof = start_time.elapsed().as_secs_f64();
     // stat_collector.total_time = prover_start_time.elapsed().as_secs_f64();
     let _ = log_prover_stats(stat_collector);
     Ok(())

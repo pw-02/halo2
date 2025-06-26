@@ -34,6 +34,7 @@ mod multicore;
 pub mod plonk;
 pub mod poly;
 pub mod transcript;
+pub mod profiler;
 
 pub mod dev;
 mod helpers;
