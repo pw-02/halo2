@@ -1119,7 +1119,7 @@ fn test_compare_cpu_gpu_fft() {
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
-    for k in 4..=8 {
+    for k in 8..=15 {
         // polynomial degree n = 2^k
         let n = 1u64 << k;
 
@@ -1137,7 +1137,7 @@ fn test_compare_cpu_gpu_fft() {
         let timer = Instant::now();
         cpu_fft(&mut cpu_coeffs, domain.get_omega(), k);
         let cpu_dur = timer.elapsed();
-        println!("CPU FFT took {:?}", cpu_dur);
+        println!("CPU {:?}", cpu_dur);
 
         // --- pw-GPU ---
         #[cfg(feature = "gpu")]
@@ -1146,7 +1146,7 @@ fn test_compare_cpu_gpu_fft() {
             let timer = Instant::now();
             gpu_fft(&mut gpu_coeffs, domain.get_omega(), k);
             let gpu_dur = timer.elapsed();
-            println!("GPU FFT took {:?}", gpu_dur);
+            println!("GPU {:?}", gpu_dur);
 
             assert_eq!(cpu_coeffs, gpu_coeffs, "Mismatch between CPU and pw-GPU FFT at k={}", k);
             println!("GPU speedup: x{}", cpu_dur.as_secs_f32() / gpu_dur.as_secs_f32());
