@@ -98,9 +98,9 @@ pub fn multiexp_on_device<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> 
 }
 
 pub fn fft_on_device<Scalar: ff::PrimeField, G: FftGroup<Scalar> + ff::PrimeField>(
-    scalars: &mut [G], 
-    omega: Scalar, 
-    _log_n: u32, 
+    scalars: &mut [G],
+    omega: Scalar,
+    _log_n: u32,
     inverse: bool
 ) {
     let cfg = NTTConfig::<'_, ScalarField>::default();

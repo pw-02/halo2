@@ -33,7 +33,6 @@ use {
 use super::icicle;
 #[cfg(feature = "icicle_gpu")]
 
-use rustacuda::prelude::DeviceBuffer;
 use csv::Writer;
 use std::path::Path;
 use serde::Serialize;
@@ -274,24 +273,16 @@ pub fn best_fft_gpu<Scalar: Field, G: FftGroup<Scalar>>(
     a: &mut [G],
     omega: Scalar,
     log_n: u32,
-) {
-    let mut stat_collector = FFTLoggingInfo::new(
-            a.len() as u32,
-            log_n,
-            0.0, // placeholder for fft_duration
-            "icicle-gpu"
-        );
-    icicle::ntt::
+    inverse: bool
+) 
 
-    icicle::fft_on_device::<Scalar, G>(a, omega, log_n);
+{
+    // let mut kern = FftKernel::<Bn256>::create(&devices).expect("Cannot initialize kernel!");
+    // kern.radix_fft_many(&mut [a], &[omega], &[log_n]).expect("GPU FFT failed!");
 
-    let total_fft_time = timer.elapsed();
-    stat_collector.fft_duration = total_fft_time.as_secs_f64();
-    let _ = log_fft_stats(stat_collector);
-    let d = 1 << log_n;
-    // Using default config
-    let cfg = ntt::NTTConfig::<Bn254ScalarField>::default();
+    icicle::fft_on_device::<Scalar, G>(a, omega, log_n, inverse);
 }
+
 
 #[cfg(feature = "icicle_gpu")]
 /// Performs a multi-exponentiation operation on GPU using Icicle library
@@ -385,12 +376,7 @@ pub fn gpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> Result
     let g2 = (g.clone(), 0);
     let (bss, skip) =  (g2.0.clone(), g2.1);
     let result = kern.multiexp(&pool, bss, t, skip).map_err(Into::into);
-    // let total_msm_time = start_time.elapsed();
-    // stat_collector.msm_duration = total_msm_time.as_secs_f64();
-    // // Handle potential logging errors
-    // if let Err(e) = log_msm_stats(stat_collector) {
-    //     eprintln!("Failed to log MSM stats: {}", e);
-    // }
+
     result
 }
 
@@ -463,30 +449,63 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 /// by $n$.
 ///
 /// This will use multithreading if beneficial.
-pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
+/// pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
 
-    // #[cfg(feature = "icicle_gpu")]
-    // // return icicle::fft(a, omega, log_n);
-    // best_multiexp_gpu(a, omega, log_n);
+pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(
+    scalars: &mut [G],
+    omega: Scalar,
+    log_n: u32,
+) {
 
+    let mut stat_collector = FFTLoggingInfo {
+        size: scalars.len() as u32,
+        logn: log_n,
+        fft_duration: 0.0, // placeholder for fft_duration
+        device: String::from(""),
+    };
+    let timer = Instant::now();
+    let start_time = Instant::now();
 
-    #[cfg(feature = "gpu")]
-    gpu_fft(a, omega, log_n);
+    // Priority: icicle_gpu > gpu > cpu
+    #[cfg(feature = "icicle_gpu")]
+    {
+        stat_collector.device = String::from("icicle-gpu");
+        best_fft_gpu(scalars, omega, log_n, inverse);
+        stat_collector.fft_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_fft_stats(stat_collector) {
+            eprintln!("Failed to log FFT stats: {}", e);
+        }
+        return;
+    }
 
-    #[cfg(not(any(feature = "gpu", feature = "opencl")))]
-    cpu_fft(a, omega, log_n);
+    #[cfg(all(feature = "gpu", not(feature = "icicle_gpu")))]
+    {
+        stat_collector.device = String::from("pw-gpu");
+        gpu_fft(scalars, omega, log_n);
+        stat_collector.fft_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_fft_stats(stat_collector) {
+            eprintln!("Failed to log FFT stats: {}", e);
+        }
+        return;
+    }
+
+    #[cfg(not(any(feature = "gpu", feature = "icicle_gpu")))]
+    {
+        stat_collector.device = String::from("cpu");
+        cpu_fft(scalars, omega, log_n);
+        stat_collector.fft_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_fft_stats(stat_collector) {
+            eprintln!("Failed to log FFT stats: {}", e);
+        }
+        return;
+    }
 }
+
 
 #[cfg(feature = "gpu")]
 pub fn gpu_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
     
-    let mut stat_collector = FFTLoggingInfo::new(
-        a.len() as u32,
-        log_n,
-        0.0, // placeholder for fft_duration
-        "gpu"
-    );
-    let timer = Instant::now();
+    
     let devices = Device::all();
     // let programs = devices
     //     .iter()
@@ -498,24 +517,11 @@ pub fn gpu_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, l
 
     let mut kern = FftKernel::<Bn256>::create(&devices).expect("Cannot initialize kernel!");
     kern.radix_fft_many(&mut [a], &[omega], &[log_n]).expect("GPU FFT failed!");
-
-    let total_fft_time = timer.elapsed();
-    stat_collector.fft_duration = total_fft_time.as_secs_f64();
-    let _ = log_fft_stats(stat_collector);
 }
 
+
 pub fn cpu_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
-    
-    let mut stat_collector = FFTLoggingInfo::new(
-        a.len() as u32,
-        log_n,
-        0.0, // placeholder for fft_duration
-        "cpu"
-    );
-
-    let timer = Instant::now();
-
-    
+ 
     fn bitreverse(mut n: usize, l: usize) -> usize {
         let mut r = 0;
         for _ in 0..l {
@@ -578,10 +584,6 @@ pub fn cpu_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, l
     } else {
         recursive_butterfly_arithmetic(a, n, 1, &twiddles)
     }
-
-    let total_fft_time = timer.elapsed();
-    stat_collector.fft_duration = total_fft_time.as_secs_f64();
-    let _ = log_fft_stats(stat_collector);
 }
 
 
@@ -1169,49 +1171,3 @@ fn test_compare_cpu_gpu_fft() {
 
 
 
-
-// #[test]
-// fn test_compare_cpu_gpu_fft() {
-//     use crate::poly::EvaluationDomain;
-//     use std::time::Instant;
-//     use halo2curves::bn256::Fr;
-//     use rand_core::OsRng;
-//     use rand_chacha::ChaChaRng;
-//     use rand_core::{SeedableRng, RngCore};
-//     use cpu_fft;
-//     use gpu_fft;
-
-//     let seed = [0u8; 32]; // You can change this to any 32-byte array
-//     let mut rng = ChaChaRng::from_seed(seed);
-    
-//     for k in 16..=20 {
-//         // polynomial degree n = 2^k
-//         let n = 1u64 << k;
-//         let log_n = k; // log_n is just k because n = 2^k
-        
-//         // polynomial coeffs
-//         let inital_coeffs: Vec<_> = (0..n).map(|_| Fr::random(&mut rng)).collect();
-        
-//         let mut cpu_coeffs = inital_coeffs.clone();
-//         let mut gpu_coeffs = inital_coeffs.clone();
-//         // evaluation domain
-//         let domain: EvaluationDomain<Fr> = EvaluationDomain::new(1, k);
-
-//         println!("Testing FFT for {} elements, degree {}...", n, k);
-        
-//         let timer = Instant::now();
-//         cpu_fft(&mut cpu_coeffs, domain.get_omega(), k);
-//         let cpu_dur = timer.elapsed();
-//         println!("CPU FFT took {:?}", cpu_dur);
-
-//         let timer = Instant::now(); // Reset timer
-//         gpu_fft(&mut gpu_coeffs, domain.get_omega(), k);
-//         let gpu_dur = timer.elapsed();
-//         println!("GPU FFT took {:?}", gpu_dur);
-
-//         println!("Speedup: x{}", cpu_dur.as_secs_f32() / gpu_dur.as_secs_f32());
-//         // assert_eq!(cpu_coeffs, inital_coeffs);
-//         // Allow small relative error
-//         assert_eq!(cpu_coeffs, gpu_coeffs);
-//     }
-// }
