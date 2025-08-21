@@ -7,7 +7,7 @@ use halo2_proofs::{
 };
 use std::marker::PhantomData;
 use std::ops::Range;
-
+ use rand::RngCore;
 /// A type that has a value at either keygen or proving time.
 pub trait FieldValue<F: Field> {
     /// Returns the value of this type.
