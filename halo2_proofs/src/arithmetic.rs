@@ -32,6 +32,7 @@ use {
 #[cfg(feature = "icicle_gpu")]
 use super::icicle;
 #[cfg(feature = "icicle_gpu")]
+
 use rustacuda::prelude::DeviceBuffer;
 use csv::Writer;
 use std::path::Path;
@@ -267,27 +268,45 @@ pub fn small_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::C
     acc
 }
 
-// /// Performs a FFFT operation on GPU
-// #[cfg(feature = "icicle_gpu")]
-// pub fn best_fft_gpu<Scalar: Field, G: FftGroup<Scalar>>(
-//     a: &mut [G],
-//     omega: Scalar,
-//     log_n: u32,
-// ) {
-//     icicle::ntt::
-//     icicle::fft_on_device::<Scalar, G>(a, omega, log_n);
-//     let d = 1 << log_n;
-//     // Using default config
-//     let cfg = ntt::NTTConfig::<Bn254ScalarField>::default();
-// }
+/// Performs a FFFT operation on GPU
+#[cfg(feature = "icicle_gpu")]
+pub fn best_fft_gpu<Scalar: Field, G: FftGroup<Scalar>>(
+    a: &mut [G],
+    omega: Scalar,
+    log_n: u32,
+) {
+    let mut stat_collector = FFTLoggingInfo::new(
+            a.len() as u32,
+            log_n,
+            0.0, // placeholder for fft_duration
+            "icicle-gpu"
+        );
+    icicle::ntt::
+
+    icicle::fft_on_device::<Scalar, G>(a, omega, log_n);
+
+    let total_fft_time = timer.elapsed();
+    stat_collector.fft_duration = total_fft_time.as_secs_f64();
+    let _ = log_fft_stats(stat_collector);
+    let d = 1 << log_n;
+    // Using default config
+    let cfg = ntt::NTTConfig::<Bn254ScalarField>::default();
+}
 
 #[cfg(feature = "icicle_gpu")]
 /// Performs a multi-exponentiation operation on GPU using Icicle library
-pub fn best_multiexp_gpu<C: CurveAffine>(coeffs: &[C::Scalar], is_lagrange: bool) -> C::Curve {
-    let scalars_ptr: DeviceBuffer<::icicle::curves::bn254::ScalarField_BN254> =
-        icicle::copy_scalars_to_device::<C>(coeffs);
+pub fn best_multiexp_gpu<C: CurveAffine>(coeffs: &[C::Scalar], g: &[C]) -> C::Curve {
+    let result =   icicle::multiexp_on_device::<C>(coeffs, g);
 
-    return icicle::multiexp_on_device::<C>(scalars_ptr, is_lagrange);
+    // let scalars_ptr: DeviceBuffer<::icicle::curves::bn254::ScalarField_BN254> =
+    //     icicle::copy_scalars_to_device::<C>(coeffs);
+
+    // result = icicle::multiexp_on_device::<C>(scalars_ptr, is_lagrange);
+    // let total_msm_time = start_time.elapsed();
+  
+    return result;
+
+    // return icicle::multiexp_on_device::<C>(scalars_ptr, is_lagrange);
 }
 
 /// Performs a multi-exponentiation operation.
@@ -298,14 +317,14 @@ pub fn best_multiexp_gpu<C: CurveAffine>(coeffs: &[C::Scalar], is_lagrange: bool
 pub fn cpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
     assert_eq!(coeffs.len(), bases.len());
 
-    let mut stat_collector = MSMLoggingInfo{
-        num_coeffs: coeffs.len() as u32,
-        msm_duration: 0.0,
-        device: String::from("cpu"),
-    };
+    // let mut stat_collector = MSMLoggingInfo{
+    //     num_coeffs: coeffs.len() as u32,
+    //     msm_duration: 0.0,
+    //     device: String::from("cpu"),
+    // };
 
     let num_threads = multicore::current_num_threads();
-    let start_time = Instant::now();
+    // let start_time = Instant::now();
 
     let result = if coeffs.len() > num_threads {
         let chunk = coeffs.len() / num_threads;
@@ -330,12 +349,12 @@ pub fn cpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cur
         multiexp_serial(coeffs, bases, &mut acc);
         acc
     };
-    let total_msm_time = start_time.elapsed();
-    stat_collector.msm_duration = total_msm_time.as_secs_f64();
-    // Handle potential logging errors
-    if let Err(e) = log_msm_stats(stat_collector) {
-        eprintln!("Failed to log MSM stats: {}", e);
-    }
+    // let total_msm_time = start_time.elapsed();
+    // stat_collector.msm_duration = total_msm_time.as_secs_f64();
+    // // Handle potential logging errors
+    // if let Err(e) = log_msm_stats(stat_collector) {
+    //     eprintln!("Failed to log MSM stats: {}", e);
+    // }
     result
 
 }
@@ -345,12 +364,12 @@ pub fn gpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> Result
 
     assert_eq!(coeffs.len(), bases.len());
 
-    let mut stat_collector = MSMLoggingInfo{
-        num_coeffs: coeffs.len() as u32,
-        msm_duration: 0.0,
-        device: String::from("gpu"),
-    };
-    let start_time = Instant::now();
+    // let mut stat_collector = MSMLoggingInfo{
+    //     num_coeffs: coeffs.len() as u32,
+    //     msm_duration: 0.0,
+    //     device: String::from("gpu"),
+    // };
+    // let start_time = Instant::now();
     let devices = Device::all();
     // let programs = devices
     // .iter()
@@ -366,25 +385,71 @@ pub fn gpu_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> Result
     let g2 = (g.clone(), 0);
     let (bss, skip) =  (g2.0.clone(), g2.1);
     let result = kern.multiexp(&pool, bss, t, skip).map_err(Into::into);
-    let total_msm_time = start_time.elapsed();
-    stat_collector.msm_duration = total_msm_time.as_secs_f64();
-    // Handle potential logging errors
-    if let Err(e) = log_msm_stats(stat_collector) {
-        eprintln!("Failed to log MSM stats: {}", e);
-    }
+    // let total_msm_time = start_time.elapsed();
+    // stat_collector.msm_duration = total_msm_time.as_secs_f64();
+    // // Handle potential logging errors
+    // if let Err(e) = log_msm_stats(stat_collector) {
+    //     eprintln!("Failed to log MSM stats: {}", e);
+    // }
     result
 }
 
 
 pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
-    #[cfg(feature = "gpu")]
-    let result = gpu_multiexp(coeffs, bases).unwrap();
+    let mut stat_collector = MSMLoggingInfo {
+        num_coeffs: coeffs.len() as u32,
+        msm_duration: 0.0,
+        device: String::from(""),
+    };
 
-    #[cfg(not(any(feature = "gpu", feature = "opencl")))]
-    let result = cpu_multiexp(coeffs, bases);
+    let start_time = Instant::now();
 
-    result
+    // Priority: icicle_gpu > gpu > cpu
+    #[cfg(feature = "icicle_gpu")]
+    {
+        stat_collector.device = String::from("icicle-gpu");
+        let result = best_multiexp_gpu(coeffs, bases);
+        stat_collector.msm_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_msm_stats(stat_collector) {
+            eprintln!("Failed to log MSM stats: {}", e);
+        }
+        return result;
+    }
+
+    #[cfg(all(feature = "gpu", not(feature = "icicle_gpu")))]
+    {
+        stat_collector.device = String::from("pw-gpu");
+        let result = gpu_multiexp(coeffs, bases).unwrap();
+        stat_collector.msm_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_msm_stats(stat_collector) {
+            eprintln!("Failed to log MSM stats: {}", e);
+        }
+        return result;
+    }
+
+    #[cfg(not(any(feature = "gpu", feature = "icicle_gpu")))]
+    {
+        stat_collector.device = String::from("cpu");
+        let result = cpu_multiexp(coeffs, bases);
+        stat_collector.msm_duration = start_time.elapsed().as_secs_f64();
+        if let Err(e) = log_msm_stats(stat_collector) {
+            eprintln!("Failed to log MSM stats: {}", e);
+        }
+        return result;
+    }
 }
+
+
+// pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Curve {
+
+//     #[cfg(feature = "gpu")]
+//     let result = gpu_multiexp(coeffs, bases).unwrap();
+
+//     #[cfg(not(any(feature = "gpu", feature = "opencl")))]
+//     let result = cpu_multiexp(coeffs, bases);
+
+//     result
+// }
 
 
 
@@ -399,6 +464,12 @@ pub fn best_multiexp<C: CurveAffine>(coeffs: &[C::Scalar], bases: &[C]) -> C::Cu
 ///
 /// This will use multithreading if beneficial.
 pub fn best_fft<Scalar: Field, G: FftGroup<Scalar>>(a: &mut [G], omega: Scalar, log_n: u32) {
+
+    // #[cfg(feature = "icicle_gpu")]
+    // // return icicle::fft(a, omega, log_n);
+    // best_multiexp_gpu(a, omega, log_n);
+
+
     #[cfg(feature = "gpu")]
     gpu_fft(a, omega, log_n);
 
@@ -900,69 +971,135 @@ fn test_lagrange_interpolate() {
 }
 
 
-
 #[test]
 fn test_compare_cpu_gpu_msm() {
-    use halo2curves::bn256::{Bn256, Fr, G1Affine, G1}; // Replace with appropriate curve
-    use std::time::Instant;
-    use rand_core::OsRng;
+    use halo2curves::bn256::{Fr, G1Affine};
     use rand_chacha::ChaChaRng;
-    use rand_core::{SeedableRng, RngCore};
-    use group::{Curve, prime::PrimeCurveAffine}; // For scalar multiplication and identity functions
-    use crate::halo2curves::pairing::Engine;
-    use cpu_multiexp;
-    use gpu_multiexp;
-    
-    // Define the range of MSM sizes to test, from 2^10 to 2^16
-    let start_exp = 10;
-    let end_exp = 15;
-    let seed = [0u8; 32]; // You can change this to any 32-byte array
+    use rand_core::{SeedableRng};
+    use std::time::Instant;
+    use crate::arithmetic::{cpu_multiexp, gpu_multiexp};
+
+    // // use crate::cpu_multiexp;
+    // #[cfg(feature = "gpu")]
+    // // use crate::gpu_multiexp;
+    // #[cfg(feature = "icicle_gpu")]
+    // use crate::best_multiexp_gpu;
+
+    let start_exp = 2;
+    let end_exp = 8;
+    let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
-        
+
     for k in start_exp..=end_exp {
         let num_elements = 1 << k;
-        println!("\nTesting with num_elements: {:?}", num_elements);
+        println!("\nTesting with num_elements: {}", num_elements);
 
-        // Generate random coefficients (scalars)
         let coeffs: Vec<Fr> = (0..num_elements).map(|_| Fr::random(&mut rng)).collect();
+        let bases: Vec<G1Affine> = (0..num_elements).map(|_| G1Affine::random(&mut rng)).collect();
 
-        let mut bases = (0..num_elements)
-        .map(|_| G1Affine::random(&mut rng)) // Generate random points for each base
-        .collect::<Vec<_>>();
-        
-        // Run the multi-exponentiation using the best_multiexp_cpu function
+        // Always run CPU
         let timer = Instant::now();
         let cpu_result = cpu_multiexp(&coeffs, &bases);
         let cpu_elapsed = timer.elapsed();
-        println!("CPU Result: {:?}", cpu_result.to_affine());
         println!("CPU elapsed time: {:?}", cpu_elapsed);
 
-        // Run the multi-exponentiation using the best_multiexp_gpu function
-        let timer = Instant::now();
-        let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
-        let gpu_elapsed = timer.elapsed();
-        println!("GPU Result: {:?}", gpu_result.to_affine());
-        println!("GPU elapsed time: {:?}", gpu_elapsed);
+        // Run pw-GPU if available
+        #[cfg(feature = "gpu")]
+        {
+            let timer = Instant::now();
+            let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
+            let gpu_elapsed = timer.elapsed();
+            println!("GPU elapsed time: {:?}", gpu_elapsed);
+            assert_eq!(cpu_result.to_affine(), gpu_result.to_affine());
+            println!("GPU speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
+        }
 
-        println!("Speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
-
-        assert_eq!(cpu_result.to_affine(), gpu_result.to_affine())
-        // Verify that the results match
-        // assert_eq!(cpu_result, gpu_result, "MSM result does not match for size {}", num_elements);
-
-
-        // // Output results for this size
-        // println!("num_elements: {}, elapsed time: {:?}, result {:?}", num_elements, elapsed_time, result);
-
-        // // // Optional: Verify the result with a serial MSM implementation
-        // let mut expected_result = G1::identity();
-        // for (base, coeff) in bases.iter().zip(coeffs.iter()) {
-        //     // Convert base from G1Affine to G1 before multiplication.
-        //     expected_result +=  G1Affine::from(base * coeff);
+        // // Run Icicle GPU if available
+        // #[cfg(feature = "icicle_gpu")]
+        // {
+        //     let timer = Instant::now();
+        //     let icicle_result = best_multiexp_gpu(&coeffs, &bases);
+        //     let icicle_elapsed = timer.elapsed();
+        //     println!("icicle-GPU elapsed time: {:?}", icicle_elapsed);
+        //     assert_eq!(cpu_result.to_affine(), icicle_result.to_affine());
+        //     println!("icicle-GPU speedup: x{}", cpu_elapsed.as_secs_f32() / icicle_elapsed.as_secs_f32());
         // }
-        // assert_eq!(G1Affine::from(result), G1Affine::from(expected_result), "MSM result does not match for size {}", num_elements);
     }
 }
+
+
+
+// #[test]
+// fn test_compare_cpu_gpu_msm() {
+//     use halo2curves::bn256::{Bn256, Fr, G1Affine, G1}; // Replace with appropriate curve
+//     use std::time::Instant;
+//     use rand_core::OsRng;
+//     use rand_chacha::ChaChaRng;
+//     use rand_core::{SeedableRng, RngCore};
+//     use group::{Curve, prime::PrimeCurveAffine}; // For scalar multiplication and identity functions
+//     use crate::halo2curves::pairing::Engine;
+//     use cpu_multiexp;
+//     use gpu_multiexp;
+//     use best_multiexp_gpu;
+    
+//     // Define the range of MSM sizes to test, from 2^10 to 2^16
+//     let start_exp = 2;
+//     let end_exp = 8;
+//     let seed = [0u8; 32]; // You can change this to any 32-byte array
+//     let mut rng = ChaChaRng::from_seed(seed);
+        
+//     for k in start_exp..=end_exp {
+//         let num_elements = 1 << k;
+//         println!("\nTesting with num_elements: {:?}", num_elements);
+
+//         // Generate random coefficients (scalars)
+//         let coeffs: Vec<Fr> = (0..num_elements).map(|_| Fr::random(&mut rng)).collect();
+
+//         let mut bases = (0..num_elements)
+//         .map(|_| G1Affine::random(&mut rng)) // Generate random points for each base
+//         .collect::<Vec<_>>();
+        
+//         // Run the multi-exponentiation using the best_multiexp_cpu function
+//         let timer = Instant::now();
+//         let cpu_result = cpu_multiexp(&coeffs, &bases);
+//         let cpu_elapsed = timer.elapsed();
+//         // println!("CPU Result: {:?}", cpu_result.to_affine());
+//         println!("CPU elapsed time: {:?}", cpu_elapsed);
+
+//         // Run the multi-exponentiation using the best_multiexp_gpu function
+//         let timer = Instant::now();
+//         let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
+//         let gpu_elapsed = timer.elapsed();
+//         // println!("GPU Result: {:?}", gpu_result.to_affine());
+//         println!("my-GPU elapsed time: {:?}", gpu_elapsed);
+
+//         let timer = Instant::now();
+//         let gpu_result = best_multiexp_gpu(&coeffs, true).unwrap();
+//         let gpu_elapsed = timer.elapsed();
+//         println!("Icicle-gpu elapsed time: {:?}", gpu_elapsed);
+
+
+
+
+//         println!("Speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
+
+//         assert_eq!(cpu_result.to_affine(), gpu_result.to_affine())
+//         // Verify that the results match
+//         // assert_eq!(cpu_result, gpu_result, "MSM result does not match for size {}", num_elements);
+
+
+//         // // Output results for this size
+//         // println!("num_elements: {}, elapsed time: {:?}, result {:?}", num_elements, elapsed_time, result);
+
+//         // // // Optional: Verify the result with a serial MSM implementation
+//         // let mut expected_result = G1::identity();
+//         // for (base, coeff) in bases.iter().zip(coeffs.iter()) {
+//         //     // Convert base from G1Affine to G1 before multiplication.
+//         //     expected_result +=  G1Affine::from(base * coeff);
+//         // }
+//         // assert_eq!(G1Affine::from(result), G1Affine::from(expected_result), "MSM result does not match for size {}", num_elements);
+//     }
+// }
 
 
 
