@@ -971,63 +971,6 @@ fn test_lagrange_interpolate() {
 }
 
 
-#[test]
-fn test_compare_cpu_gpu_msm() {
-    use halo2curves::bn256::{Fr, G1Affine};
-    use rand_chacha::ChaChaRng;
-    use rand_core::{SeedableRng};
-    use std::time::Instant;
-    use crate::arithmetic::{cpu_multiexp, gpu_multiexp};
-
-    // // use crate::cpu_multiexp;
-    // #[cfg(feature = "gpu")]
-    // // use crate::gpu_multiexp;
-    // #[cfg(feature = "icicle_gpu")]
-    // use crate::best_multiexp_gpu;
-
-    let start_exp = 2;
-    let end_exp = 8;
-    let seed = [0u8; 32];
-    let mut rng = ChaChaRng::from_seed(seed);
-
-    for k in start_exp..=end_exp {
-        let num_elements = 1 << k;
-        println!("\nTesting with num_elements: {}", num_elements);
-
-        let coeffs: Vec<Fr> = (0..num_elements).map(|_| Fr::random(&mut rng)).collect();
-        let bases: Vec<G1Affine> = (0..num_elements).map(|_| G1Affine::random(&mut rng)).collect();
-
-        // Always run CPU
-        let timer = Instant::now();
-        let cpu_result = cpu_multiexp(&coeffs, &bases);
-        let cpu_elapsed = timer.elapsed();
-        println!("CPU elapsed time: {:?}", cpu_elapsed);
-
-        // Run pw-GPU if available
-        #[cfg(feature = "gpu")]
-        {
-            let timer = Instant::now();
-            let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
-            let gpu_elapsed = timer.elapsed();
-            println!("GPU elapsed time: {:?}", gpu_elapsed);
-            assert_eq!(cpu_result.to_affine(), gpu_result.to_affine());
-            println!("GPU speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
-        }
-
-        // // Run Icicle GPU if available
-        // #[cfg(feature = "icicle_gpu")]
-        // {
-        //     let timer = Instant::now();
-        //     let icicle_result = best_multiexp_gpu(&coeffs, &bases);
-        //     let icicle_elapsed = timer.elapsed();
-        //     println!("icicle-GPU elapsed time: {:?}", icicle_elapsed);
-        //     assert_eq!(cpu_result.to_affine(), icicle_result.to_affine());
-        //     println!("icicle-GPU speedup: x{}", cpu_elapsed.as_secs_f32() / icicle_elapsed.as_secs_f32());
-        // }
-    }
-}
-
-
 
 // #[test]
 // fn test_compare_cpu_gpu_msm() {
@@ -1100,6 +1043,63 @@ fn test_compare_cpu_gpu_msm() {
 //         // assert_eq!(G1Affine::from(result), G1Affine::from(expected_result), "MSM result does not match for size {}", num_elements);
 //     }
 // }
+
+
+#[test]
+fn test_compare_cpu_gpu_msm() {
+    use halo2curves::bn256::{Fr, G1Affine};
+    use rand_chacha::ChaChaRng;
+    use rand_core::{SeedableRng};
+    use std::time::Instant;
+    use crate::arithmetic::{cpu_multiexp, gpu_multiexp};
+
+    // // use crate::cpu_multiexp;
+    // #[cfg(feature = "gpu")]
+    // // use crate::gpu_multiexp;
+    // #[cfg(feature = "icicle_gpu")]
+    // use crate::best_multiexp_gpu;
+
+    let start_exp = 8;
+    let end_exp = 15;
+    let seed = [0u8; 32];
+    let mut rng = ChaChaRng::from_seed(seed);
+
+    for k in start_exp..=end_exp {
+        let num_elements = 1 << k;
+        println!("\nTesting with num_elements: {}", num_elements);
+
+        let coeffs: Vec<Fr> = (0..num_elements).map(|_| Fr::random(&mut rng)).collect();
+        let bases: Vec<G1Affine> = (0..num_elements).map(|_| G1Affine::random(&mut rng)).collect();
+
+        // Always run CPU
+        let timer = Instant::now();
+        let cpu_result = cpu_multiexp(&coeffs, &bases);
+        let cpu_elapsed = timer.elapsed();
+        println!("CPU elapsed time: {:?}", cpu_elapsed);
+
+        // Run pw-GPU if available
+        #[cfg(feature = "gpu")]
+        {
+            let timer = Instant::now();
+            let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
+            let gpu_elapsed = timer.elapsed();
+            println!("GPU elapsed time: {:?}", gpu_elapsed);
+            assert_eq!(cpu_result.to_affine(), gpu_result.to_affine());
+            println!("GPU speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
+        }
+
+        // // Run Icicle GPU if available
+        // #[cfg(feature = "icicle_gpu")]
+        // {
+        //     let timer = Instant::now();
+        //     let icicle_result = best_multiexp_gpu(&coeffs, &bases);
+        //     let icicle_elapsed = timer.elapsed();
+        //     println!("icicle-GPU elapsed time: {:?}", icicle_elapsed);
+        //     assert_eq!(cpu_result.to_affine(), icicle_result.to_affine());
+        //     println!("icicle-GPU speedup: x{}", cpu_elapsed.as_secs_f32() / icicle_elapsed.as_secs_f32());
+        // }
+    }
+}
 
 
 
