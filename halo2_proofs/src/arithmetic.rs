@@ -1060,7 +1060,7 @@ fn test_compare_cpu_gpu_msm() {
     // use crate::best_multiexp_gpu;
 
     let start_exp = 10;
-    let end_exp = 16;
+    let end_exp = 19;
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
