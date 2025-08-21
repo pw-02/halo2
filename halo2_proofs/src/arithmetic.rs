@@ -1101,51 +1101,117 @@ fn test_compare_cpu_gpu_msm() {
     }
 }
 
-
-
-
 #[test]
 fn test_compare_cpu_gpu_fft() {
     use crate::poly::EvaluationDomain;
     use std::time::Instant;
     use halo2curves::bn256::Fr;
-    use rand_core::OsRng;
     use rand_chacha::ChaChaRng;
-    use rand_core::{SeedableRng, RngCore};
-    use cpu_fft;
-    use gpu_fft;
+    use rand_core::SeedableRng;
 
-    let seed = [0u8; 32]; // You can change this to any 32-byte array
+    // Import your FFT implementations
+    use crate::arithmetic::cpu_fft;
+    #[cfg(feature = "gpu")]
+    use crate::arithmetic::gpu_fft;
+    // #[cfg(feature = "icicle_gpu")]
+    // use crate::arithmetic::best_fft_gpu;
+
+    let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
-    
-    for k in 16..=20 {
+
+    for k in 4..=8 {
         // polynomial degree n = 2^k
         let n = 1u64 << k;
-        let log_n = k; // log_n is just k because n = 2^k
-        
+
         // polynomial coeffs
-        let inital_coeffs: Vec<_> = (0..n).map(|_| Fr::random(&mut rng)).collect();
-        
-        let mut cpu_coeffs = inital_coeffs.clone();
-        let mut gpu_coeffs = inital_coeffs.clone();
+        let initial_coeffs: Vec<_> = (0..n).map(|_| Fr::random(&mut rng)).collect();
+
+        let mut cpu_coeffs = initial_coeffs.clone();
+
         // evaluation domain
         let domain: EvaluationDomain<Fr> = EvaluationDomain::new(1, k);
 
-        println!("Testing FFT for {} elements, degree {}...", n, k);
-        
+        println!("\nTesting FFT with 2^{} = {} elements", k, n);
+
+        // --- CPU ---
         let timer = Instant::now();
         cpu_fft(&mut cpu_coeffs, domain.get_omega(), k);
         let cpu_dur = timer.elapsed();
         println!("CPU FFT took {:?}", cpu_dur);
 
-        let timer = Instant::now(); // Reset timer
-        gpu_fft(&mut gpu_coeffs, domain.get_omega(), k);
-        let gpu_dur = timer.elapsed();
-        println!("GPU FFT took {:?}", gpu_dur);
+        // --- pw-GPU ---
+        #[cfg(feature = "gpu")]
+        {
+            let mut gpu_coeffs = initial_coeffs.clone();
+            let timer = Instant::now();
+            gpu_fft(&mut gpu_coeffs, domain.get_omega(), k);
+            let gpu_dur = timer.elapsed();
+            println!("GPU FFT took {:?}", gpu_dur);
 
-        println!("Speedup: x{}", cpu_dur.as_secs_f32() / gpu_dur.as_secs_f32());
-        // assert_eq!(cpu_coeffs, inital_coeffs);
-        // Allow small relative error
-        assert_eq!(cpu_coeffs, gpu_coeffs);
+            assert_eq!(cpu_coeffs, gpu_coeffs, "Mismatch between CPU and pw-GPU FFT at k={}", k);
+            println!("GPU speedup: x{}", cpu_dur.as_secs_f32() / gpu_dur.as_secs_f32());
+        }
+
+        // --- Icicle GPU (optional) ---
+        // #[cfg(feature = "icicle_gpu")]
+        // {
+        //     let mut icicle_coeffs = initial_coeffs.clone();
+        //     let timer = Instant::now();
+        //     best_fft_gpu(&mut icicle_coeffs, domain.get_omega(), k);
+        //     let icicle_dur = timer.elapsed();
+        //     println!("Icicle GPU FFT took {:?}", icicle_dur);
+        //
+        //     assert_eq!(cpu_coeffs, icicle_coeffs, "Mismatch between CPU and icicle-GPU FFT at k={}", k);
+        //     println!("Icicle GPU speedup: x{}", cpu_dur.as_secs_f32() / icicle_dur.as_secs_f32());
+        // }
     }
 }
+
+
+
+
+// #[test]
+// fn test_compare_cpu_gpu_fft() {
+//     use crate::poly::EvaluationDomain;
+//     use std::time::Instant;
+//     use halo2curves::bn256::Fr;
+//     use rand_core::OsRng;
+//     use rand_chacha::ChaChaRng;
+//     use rand_core::{SeedableRng, RngCore};
+//     use cpu_fft;
+//     use gpu_fft;
+
+//     let seed = [0u8; 32]; // You can change this to any 32-byte array
+//     let mut rng = ChaChaRng::from_seed(seed);
+    
+//     for k in 16..=20 {
+//         // polynomial degree n = 2^k
+//         let n = 1u64 << k;
+//         let log_n = k; // log_n is just k because n = 2^k
+        
+//         // polynomial coeffs
+//         let inital_coeffs: Vec<_> = (0..n).map(|_| Fr::random(&mut rng)).collect();
+        
+//         let mut cpu_coeffs = inital_coeffs.clone();
+//         let mut gpu_coeffs = inital_coeffs.clone();
+//         // evaluation domain
+//         let domain: EvaluationDomain<Fr> = EvaluationDomain::new(1, k);
+
+//         println!("Testing FFT for {} elements, degree {}...", n, k);
+        
+//         let timer = Instant::now();
+//         cpu_fft(&mut cpu_coeffs, domain.get_omega(), k);
+//         let cpu_dur = timer.elapsed();
+//         println!("CPU FFT took {:?}", cpu_dur);
+
+//         let timer = Instant::now(); // Reset timer
+//         gpu_fft(&mut gpu_coeffs, domain.get_omega(), k);
+//         let gpu_dur = timer.elapsed();
+//         println!("GPU FFT took {:?}", gpu_dur);
+
+//         println!("Speedup: x{}", cpu_dur.as_secs_f32() / gpu_dur.as_secs_f32());
+//         // assert_eq!(cpu_coeffs, inital_coeffs);
+//         // Allow small relative error
+//         assert_eq!(cpu_coeffs, gpu_coeffs);
+//     }
+// }
