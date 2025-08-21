@@ -1088,16 +1088,16 @@ fn test_compare_cpu_gpu_msm() {
             println!("GPU speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
         }
 
-        // // Run Icicle GPU if available
-        // #[cfg(feature = "icicle_gpu")]
-        // {
-        //     let timer = Instant::now();
-        //     let icicle_result = best_multiexp_gpu(&coeffs, &bases);
-        //     let icicle_elapsed = timer.elapsed();
-        //     println!("icicle-GPU elapsed time: {:?}", icicle_elapsed);
-        //     assert_eq!(cpu_result.to_affine(), icicle_result.to_affine());
-        //     println!("icicle-GPU speedup: x{}", cpu_elapsed.as_secs_f32() / icicle_elapsed.as_secs_f32());
-        // }
+        // Run Icicle GPU if available
+        #[cfg(feature = "icicle_gpu")]
+        {
+            let timer = Instant::now();
+            let icicle_result = best_multiexp_gpu(&coeffs, &bases);
+            let icicle_elapsed = timer.elapsed();
+            println!("icicle-GPU elapsed time: {:?}", icicle_elapsed);
+            assert_eq!(cpu_result.to_affine(), icicle_result.to_affine());
+            println!("icicle-GPU speedup: x{}", cpu_elapsed.as_secs_f32() / icicle_elapsed.as_secs_f32());
+        }
     }
 }
 
