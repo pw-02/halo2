@@ -1126,7 +1126,7 @@ fn test_compare_cpu_gpu_fft() {
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
-    for k in 8..=15 {
+    for k in 10..=19 {
         // polynomial degree n = 2^k
         let n = 1u64 << k;
 
