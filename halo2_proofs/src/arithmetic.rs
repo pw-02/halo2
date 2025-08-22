@@ -1124,11 +1124,11 @@ fn test_compare_cpu_gpu_fft() {
     let mut rng = ChaChaRng::from_seed(seed);
 
     // Pre-generate a large pool of random coeffs once (enough for largest n)
-    let max_k = 23;
+    let max_k = 28;
     let max_n = 1 << max_k;
     let all_coeffs: Vec<_> = (0..max_n).map(|_| Fr::random(&mut rng)).collect();
 
-    for k in 20..=max_k {
+    for k in 24..=max_k {
         let n = 1 << k;
 
         // slice the first n coeffs instead of regenerating
