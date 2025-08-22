@@ -1062,35 +1062,40 @@ fn test_compare_cpu_gpu_msm() {
     // use crate::best_multiexp_gpu;
 
     let start_exp = 10;
-    let end_exp = 19;
+    let end_exp = 25;
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
+    // Pre-generate the maximum size once
+    let max_elements = 1 << end_exp;
+    let all_coeffs: Vec<Fr> = (0..max_elements).map(|_| Fr::random(&mut rng)).collect();
+    let all_bases: Vec<G1Affine> = (0..max_elements).map(|_| G1Affine::random(&mut rng)).collect();
+
+    // Then benchmark by slicing
     for k in start_exp..=end_exp {
         let num_elements = 1 << k;
         println!("\nTesting with num_elements: {}", num_elements);
 
-        let coeffs: Vec<Fr> = (0..num_elements).map(|_| Fr::random(&mut rng)).collect();
-        let bases: Vec<G1Affine> = (0..num_elements).map(|_| G1Affine::random(&mut rng)).collect();
+        let coeffs = &all_coeffs[..num_elements];
+        let bases = &all_bases[..num_elements];
 
-        // Always run CPU
+        // CPU
         let timer = Instant::now();
-        let cpu_result = cpu_multiexp(&coeffs, &bases);
+        let cpu_result = cpu_multiexp(coeffs, bases);
         let cpu_elapsed = timer.elapsed();
         println!("CPU elapsed time: {:?}", cpu_elapsed);
 
-        // Run pw-GPU if available
+        // GPU
         #[cfg(feature = "gpu")]
         {
             let timer = Instant::now();
-            let gpu_result = gpu_multiexp(&coeffs, &bases).unwrap();
+            let gpu_result = gpu_multiexp(coeffs, bases).unwrap();
             let gpu_elapsed = timer.elapsed();
             println!("GPU elapsed time: {:?}", gpu_elapsed);
             assert_eq!(cpu_result.to_affine(), gpu_result.to_affine());
             println!("GPU speedup: x{}", cpu_elapsed.as_secs_f32() / gpu_elapsed.as_secs_f32());
         }
-
-        // Run Icicle GPU if available
+         // Run Icicle GPU if available
         #[cfg(feature = "icicle_gpu")]
         {
             let timer = Instant::now();
