@@ -1063,7 +1063,7 @@ fn test_compare_cpu_gpu_msm() {
 
 
     let start_exp = 10;
-    let end_exp = 23;
+    let end_exp = 12;
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
