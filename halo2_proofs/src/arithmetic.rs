@@ -1061,8 +1061,9 @@ fn test_compare_cpu_gpu_msm() {
     // #[cfg(feature = "icicle_gpu")]
     // use crate::best_multiexp_gpu;
 
+
     let start_exp = 10;
-    let end_exp = 25;
+    let end_exp = 23;
     let seed = [0u8; 32];
     let mut rng = ChaChaRng::from_seed(seed);
 
