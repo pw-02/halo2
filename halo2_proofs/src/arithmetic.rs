@@ -1076,7 +1076,7 @@ fn test_compare_cpu_gpu_msm() {
     // let all_bases: Vec<G1Affine> = (0..max_elements).map(|_| G1Affine::random(&mut rng)).collect();
     let all_bases: Vec<G1Affine> = (0..max_elements)
         .map(|i| G1Affine::generator() * Fr::from(i as u64))
-        .map(|p| p.into_affine())
+        .map(|p| p.to_affine())
         .collect();
     // Then benchmark by slicing
     for k in start_exp..=end_exp {
