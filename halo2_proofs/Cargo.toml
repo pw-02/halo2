@@ -112,7 +112,7 @@ serde_json = "1"
 getrandom = { version = "0.2", features = ["js"] }
 
 [features]
-default = ["batch", "bits"] #default = ["batch", "bits", "gpu"]
+default = ["batch", "bits", "gpu"] #default = ["batch", "bits", "gpu"]
 dev-graph = ["plotters", "tabbycat"]
 test-dev-graph = [
     "dev-graph",
