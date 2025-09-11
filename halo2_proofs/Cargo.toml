@@ -80,8 +80,8 @@ serde = { version = "1", features = ["derive"] }
 serde_derive = { version = "1"}
 
 # #GPU Itegration
-# ec-gpu-gen ={ path = "../../ec-gpu/ec-gpu-gen",optional = true}
-# ec-gpu ={ path = "../../ec-gpu/ec-gpu",optional = true}
+ec-gpu-gen ={ path = "../../ec-gpu/ec-gpu-gen",optional = true}
+ec-gpu ={ path = "../../ec-gpu/ec-gpu",optional = true}
 fs2 = { version = "0.4.3", optional = true }
 rust-gpu-tools = { version = "0.7.0", default-features = false, optional = true }
 
