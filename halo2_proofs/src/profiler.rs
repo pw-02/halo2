@@ -42,23 +42,19 @@ fn transition_file() -> Option<PathBuf> {
 }
 
 /// Export the currently executing Halo2 prover subphase to the host runtime.
-///
-/// The preferred integration is ZKINFER_STAGE_FILE. For the existing zkInfer
-/// execution path, EZKL_LOG_DIR already points at the per-job artifact directory,
-/// so we fall back to <EZKL_LOG_DIR>/status.txt. If neither is configured this
-/// remains a no-op. During a measured prover region the stage is
-/// `PROVING::<phase_key>` and is restored to `PROVING` afterwards.
 fn write_stage(stage: &str) {
     if let Some(path) = stage_file() {
         let _ = std::fs::write(path, stage);
     }
 }
 
-/// Append exact start/end events for Halo2 subphases. This complements the
-/// sampled resource trace: halo2_prover_cpu.csv still contains aggregate timing
-/// and CPU measurements, while this file preserves execution order and exact
-/// boundaries so RSS/CPU samples can be aligned with the prover internals.
-fn append_transition(event: &str, phase_key: &str) {
+/// Append exact start/end events for Halo2 subphases.
+///
+/// Start rows leave duration columns empty. End rows contain the elapsed time
+/// measured by the same monotonic Instant that brackets the profiled region.
+/// Keeping both event rows makes incomplete/crashed regions visible while also
+/// making completed phase durations directly usable by analysis code.
+fn append_transition(event: &str, phase_key: &str, duration_s: Option<f64>) {
     let Some(path) = transition_file() else {
         return;
     };
@@ -66,27 +62,49 @@ fn append_transition(event: &str, phase_key: &str) {
     let file_exists = path.exists();
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         if !file_exists {
-            let _ = writeln!(file, "timestamp_unix_us,event,stage");
+            let _ = writeln!(
+                file,
+                "timestamp_unix_us,event,stage,duration_us,duration_s"
+            );
         }
-        let _ = writeln!(
-            file,
-            "{},{},PROVING::{}",
-            now_unix_micros(),
-            event,
-            phase_key
-        );
+
+        match duration_s {
+            Some(seconds) => {
+                let duration_us = (seconds * 1_000_000.0).round() as u128;
+                let _ = writeln!(
+                    file,
+                    "{},{},PROVING::{},{},{:.9}",
+                    now_unix_micros(),
+                    event,
+                    phase_key,
+                    duration_us,
+                    seconds
+                );
+            }
+            None => {
+                let _ = writeln!(
+                    file,
+                    "{},{},PROVING::{},,",
+                    now_unix_micros(),
+                    event,
+                    phase_key
+                );
+            }
+        }
         let _ = file.flush();
     }
 }
 
-fn begin_phase(phase_key: &str) {
+fn begin_phase(phase_key: &str) -> Instant {
+    let started = Instant::now();
     let stage = format!("PROVING::{phase_key}");
     write_stage(&stage);
-    append_transition("start", phase_key);
+    append_transition("start", phase_key, None);
+    started
 }
 
-fn end_phase(phase_key: &str) {
-    append_transition("end", phase_key);
+fn end_phase(phase_key: &str, started: Instant) {
+    append_transition("end", phase_key, Some(started.elapsed().as_secs_f64()));
     write_stage(OUTER_PROVER_STAGE);
 }
 
@@ -116,7 +134,7 @@ impl Profiler {
     where
         F: FnOnce() -> T,
     {
-        begin_phase(phase_key);
+        let phase_started = begin_phase(phase_key);
         let start = Instant::now();
         self.system.refresh_cpu();
 
@@ -129,7 +147,7 @@ impl Profiler {
         println!("📊 {:<35} | ⏱ {:>6.3}s | 🧠 {:>5.2}% CPU", label, elapsed, cpu);
 
         stat_collector.insert(phase_key, elapsed, cpu);
-        end_phase(phase_key);
+        end_phase(phase_key, phase_started);
         result
     }
 
@@ -140,7 +158,7 @@ impl Profiler {
         field: &str,
         f: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
-        begin_phase(field);
+        let phase_started = begin_phase(field);
         let start = Instant::now();
         self.system.refresh_cpu();
 
@@ -153,7 +171,7 @@ impl Profiler {
         println!("📊 {:<35} | ⏱ {:>6.3}s | 🧠 {:>5.2}% CPU", label, duration, cpu);
 
         stat_collector.insert(field, duration, cpu);
-        end_phase(field);
+        end_phase(field, phase_started);
         result
     }
 
@@ -167,14 +185,14 @@ impl Profiler {
     where
         F: FnOnce() -> T,
     {
-        begin_phase(stat_field);
+        let phase_started = begin_phase(stat_field);
         let start_time = Instant::now();
         let result = f();
         let duration = start_time.elapsed().as_secs_f64();
 
         self.log(label, duration);
         stat_collector.insert(stat_field, duration, 0.0);
-        end_phase(stat_field);
+        end_phase(stat_field, phase_started);
 
         result
     }
