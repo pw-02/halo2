@@ -1,6 +1,7 @@
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use sysinfo::{CpuExt, System, SystemExt};
@@ -16,31 +17,53 @@ fn now_unix_micros() -> u128 {
         .unwrap_or(0)
 }
 
-/// Export the currently executing Halo2 prover subphase to the host runtime.
-///
-/// zkInfer sets ZKINFER_STAGE_FILE to the same status file sampled by its
-/// resource logger. Halo2 itself remains independent of zkInfer: if the env var
-/// is absent, this is a no-op. While a measured prover region is running the
-/// status becomes `PROVING::<phase_key>` and is restored to `PROVING` when the
-/// region ends.
-fn write_stage(stage: &str) {
+fn stage_file() -> Option<PathBuf> {
     if let Ok(path) = env::var("ZKINFER_STAGE_FILE") {
         if !path.is_empty() {
-            let _ = std::fs::write(path, stage);
+            return Some(PathBuf::from(path));
         }
+    }
+    env::var("EZKL_LOG_DIR")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(path).join("status.txt"))
+}
+
+fn transition_file() -> Option<PathBuf> {
+    if let Ok(path) = env::var("ZKINFER_HALO2_STAGE_TRANSITIONS_FILE") {
+        if !path.is_empty() {
+            return Some(PathBuf::from(path));
+        }
+    }
+    env::var("EZKL_LOG_DIR")
+        .ok()
+        .filter(|path| !path.is_empty())
+        .map(|path| PathBuf::from(path).join("halo2_stage_transitions.csv"))
+}
+
+/// Export the currently executing Halo2 prover subphase to the host runtime.
+///
+/// The preferred integration is ZKINFER_STAGE_FILE. For the existing zkInfer
+/// execution path, EZKL_LOG_DIR already points at the per-job artifact directory,
+/// so we fall back to <EZKL_LOG_DIR>/status.txt. If neither is configured this
+/// remains a no-op. During a measured prover region the stage is
+/// `PROVING::<phase_key>` and is restored to `PROVING` afterwards.
+fn write_stage(stage: &str) {
+    if let Some(path) = stage_file() {
+        let _ = std::fs::write(path, stage);
     }
 }
 
-/// Append an exact transition record in addition to the sampled resource trace.
-/// The CSV is intentionally simple so it can be aligned with resource_usage.csv
-/// without changing proof semantics or introducing a zkInfer dependency.
+/// Append exact start/end events for Halo2 subphases. This complements the
+/// sampled resource trace: halo2_prover_cpu.csv still contains aggregate timing
+/// and CPU measurements, while this file preserves execution order and exact
+/// boundaries so RSS/CPU samples can be aligned with the prover internals.
 fn append_transition(event: &str, phase_key: &str) {
-    let path = match env::var("ZKINFER_HALO2_STAGE_TRANSITIONS_FILE") {
-        Ok(path) if !path.is_empty() => path,
-        _ => return,
+    let Some(path) = transition_file() else {
+        return;
     };
 
-    let file_exists = std::path::Path::new(&path).exists();
+    let file_exists = path.exists();
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
         if !file_exists {
             let _ = writeln!(file, "timestamp_unix_us,event,stage");
