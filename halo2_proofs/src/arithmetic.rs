@@ -69,7 +69,10 @@ struct MSMLoggingInfo {
 }
 
 fn log_fft_stats(stat_collector:FFTLoggingInfo)-> Result<(), Box<dyn Error>>
-{  
+{
+    if env::var("ZKINFER_PROFILING_MODE").as_deref() != Ok("debug") {
+        return Ok(());
+    }  
     // let filename = "halo2_ffts.csv";
     let log_dir = env::var("EZKL_LOG_DIR").unwrap_or_else(|_| ".".to_string());
     std::fs::create_dir_all(&log_dir).ok();
@@ -103,7 +106,10 @@ fn log_fft_stats(stat_collector:FFTLoggingInfo)-> Result<(), Box<dyn Error>>
 }
 
 fn log_msm_stats(stat_collector:MSMLoggingInfo)-> Result<(), Box<dyn Error>>
-{   
+{
+    if env::var("ZKINFER_PROFILING_MODE").as_deref() != Ok("debug") {
+        return Ok(());
+    }   
     // let filename = "halo2_msms.csv";
     // Read log directory from env var, default to "."
     let log_dir = env::var("EZKL_LOG_DIR").unwrap_or_else(|_| ".".to_string());
