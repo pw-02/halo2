@@ -1238,7 +1238,9 @@ where
     
     // stat_collector.create_proof = start_time.elapsed().as_secs_f64();
     // stat_collector.total_time = prover_start_time.elapsed().as_secs_f64();
-    let _ = log_prover_stats(stat_collector);
+    if env::var("ZKINFER_PROFILING_MODE").as_deref() == Ok("debug") {
+        let _ = log_prover_stats(stat_collector);
+    }
     Ok(())
 
 }
