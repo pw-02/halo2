@@ -772,7 +772,9 @@ where
     // let start_time = Instant::now();
 
     #[cfg(feature = "mv-lookup")]
-    let lookups: Vec<Vec<lookup::prover::Committed<Scheme::Curve>>> = lookups
+    let lookups: Vec<Vec<lookup::prover::Committed<Scheme::Curve>>> = profiler.measure_result(
+        "lookup_product_commitments", &mut stat_collector, "lookup_product_commitments",
+        || lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
             // Construct and commit to products for each lookup
@@ -781,10 +783,13 @@ where
                 .map(|lookup| lookup.commit_grand_sum(pk, params, beta, &mut rng, transcript))
                 .collect::<Result<Vec<_>, _>>()
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>(),
+    )?;
 
     #[cfg(not(feature = "mv-lookup"))]
-    let lookups: Vec<Vec<lookup::prover::Committed<Scheme::Curve>>> = lookups
+    let lookups: Vec<Vec<lookup::prover::Committed<Scheme::Curve>>> = profiler.measure_result(
+        "lookup_product_commitments", &mut stat_collector, "lookup_product_commitments",
+        || lookups
         .into_iter()
         .map(|lookups| -> Result<Vec<_>, _> {
             // Construct and commit to products for each lookup
@@ -793,7 +798,8 @@ where
                 .map(|lookup| lookup.commit_product(pk, params, beta, gamma, &mut rng, transcript))
                 .collect::<Result<Vec<_>, _>>()
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>(),
+    )?;
 
     // stat_collector.construct_and_comit_to_lookup_products = start_time.elapsed().as_secs_f64();
 
@@ -850,7 +856,9 @@ where
     
 
     // Calculate the advice polys
-    let advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = advice
+    let advice: Vec<AdviceSingle<Scheme::Curve, Coeff>> = profiler.measure(
+        "calc_advice_polys", &mut stat_collector, "calc_advice_polys",
+        || advice
         .into_iter()
         .map(
             |AdviceSingle {
@@ -866,7 +874,8 @@ where
                 }
             },
         )
-        .collect();
+        .collect(),
+    );
 
 
     
@@ -1017,6 +1026,9 @@ where
 
 
       // Compute and hash fixed evals (shared across all circuit instances)
+    profiler.measure_result::<(), Error>(
+        "compute_and_hash_fixed_evals", &mut stat_collector, "compute_and_hash_fixed_evals",
+        || {
     let fixed_evals: Vec<_> = meta
         .fixed_queries
         .iter()
@@ -1029,6 +1041,9 @@ where
     for eval in fixed_evals.iter() {
         transcript.write_scalar(*eval)?;
     }
+        Ok(())
+        },
+    )?;
     // stat_collector.compute_and_hash_fixed_evals = start_time.elapsed().as_secs_f64();
 
     let vanishing = profiler.measure_result(
