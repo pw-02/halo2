@@ -96,6 +96,9 @@ fn append_transition(event: &str, phase_key: &str, duration_s: Option<f64>) {
 }
 
 fn begin_phase(phase_key: &str) -> Instant {
+    if env::var("ZKINFER_PROFILING_MODE").as_deref() == Ok("basic") {
+        return Instant::now();
+    }
     let started = Instant::now();
     let stage = format!("PROVING::{phase_key}");
     write_stage(&stage);
@@ -104,6 +107,9 @@ fn begin_phase(phase_key: &str) -> Instant {
 }
 
 fn end_phase(phase_key: &str, started: Instant) {
+    if env::var("ZKINFER_PROFILING_MODE").as_deref() == Ok("basic") {
+        return;
+    }
     append_transition("end", phase_key, Some(started.elapsed().as_secs_f64()));
     write_stage(OUTER_PROVER_STAGE);
 }
