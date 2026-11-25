@@ -121,6 +121,13 @@ pub struct Profiler {
 
 impl Profiler {
     pub fn new() -> Self {
+        // Use the same parallel backend as Halo2's arithmetic routines.
+        if let Ok(dir) = env::var("EZKL_LOG_DIR") {
+            let count = crate::multicore::current_num_threads();
+            if let Err(err) = std::fs::write(PathBuf::from(dir).join("rayon_pool_size.txt"), count.to_string()) {
+                eprintln!("Failed to record prover thread pool size: {}", err);
+            }
+        }
         let mut system = System::new_all();
         system.refresh_cpu();
         Profiler { system }
