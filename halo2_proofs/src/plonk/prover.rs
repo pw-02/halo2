@@ -318,6 +318,8 @@ where
         }
     }
 
+    crate::profiler::record_threads();
+    let phase = crate::profiler::Phase::start("witness_collection");
     let (advice, challenges) = {
         let mut advice = vec![
             AdviceSingle::<Scheme::Curve, LagrangeCoeff> {
@@ -451,6 +453,8 @@ where
         (advice, challenges)
     };
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("construct_and_commit_to_lookup_permuted_values");
     // Sample theta challenge for keeping lookup columns linearly independent
     let theta: ChallengeTheta<_> = transcript.squeeze_challenge_scalar();
 
@@ -517,6 +521,8 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("commit_to_permutations");
     // Sample beta challenge
     let beta: ChallengeBeta<_> = transcript.squeeze_challenge_scalar();
 
@@ -542,6 +548,8 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("lookup_product_commitments");
     // preallocate the lookups
 
     #[cfg(feature = "mv-lookup")]
@@ -590,6 +598,8 @@ where
         }
     }
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("shuffles");
     let shuffles: Vec<Vec<shuffle::prover::Committed<Scheme::Curve>>> = instance
         .iter()
         .zip(advice.iter())
@@ -618,9 +628,13 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("commit_vanishing_argument_random_poly");
     // Commit to the vanishing argument's random polynomial for blinding h(x_3)
     let vanishing = vanishing::Argument::commit(params, domain, &mut rng, transcript)?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("calc_advice_polys");
     // Obtain challenge for keeping all separate gates linearly independent
     let y: ChallengeY<_> = transcript.squeeze_challenge_scalar();
 
@@ -642,6 +656,8 @@ where
         )
         .collect();
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("eval_h_x_poly");
     let h_poly = pk.ev.evaluate_h(
         pk,
         &advice
@@ -662,8 +678,12 @@ where
         &permutations,
     );
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("h_x_pieces_commitments");
     let vanishing = vanishing.construct(params, domain, h_poly, &mut rng, transcript)?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("compute_and_hash_instance_evals");
     let x: ChallengeX<_> = transcript.squeeze_challenge_scalar();
     let xn = x.pow([params.n()]);
 
@@ -689,6 +709,8 @@ where
         }
     }
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("compute_and_hash_advice_evals");
     // Compute and hash advice evals for each circuit instance
     for advice in advice.iter() {
         // Evaluate polynomials at omega^i x
@@ -709,6 +731,8 @@ where
         }
     }
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("compute_and_hash_fixed_evals");
     // Compute and hash fixed evals (shared across all circuit instances)
     let fixed_evals: Vec<_> = meta
         .fixed_queries
@@ -723,8 +747,12 @@ where
         transcript.write_scalar(*eval)?;
     }
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("eval_vanishing");
     let vanishing = vanishing.evaluate(x, xn, domain, transcript)?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("eval_permutations");
     // Evaluate common permutation data
     pk.permutation.evaluate(x, transcript)?;
 
@@ -734,6 +762,8 @@ where
         .map(|permutation| -> Result<_, _> { permutation.construct().evaluate(pk, x, transcript) })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("eval_lookups");
     // Evaluate the lookups, if any, at omega^i x.
 
     let lookups: Vec<Vec<lookup::prover::Evaluated<Scheme::Curve>>> = lookups
@@ -752,6 +782,8 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("eval_shuffles");
     // Evaluate the shuffles, if any, at omega^i x.
     let shuffles: Vec<Vec<shuffle::prover::Evaluated<Scheme::Curve>>> = shuffles
         .into_iter()
@@ -763,6 +795,8 @@ where
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("query_instance");
     let instances = instance
         .iter()
         .zip(advice.iter())
@@ -825,10 +859,14 @@ where
         *FFT_COUNTER.lock().unwrap() = BTreeMap::new();
     }
 
+    drop(phase);
+    let phase = crate::profiler::Phase::start("create_proof");
     let prover = P::new(params);
-    prover
+    let result = prover
         .create_proof(rng, transcript, instances)
-        .map_err(|_| Error::ConstraintSystemFailure)
+        .map_err(|_| Error::ConstraintSystemFailure);
+    drop(phase);
+    result
 }
 
 #[test]

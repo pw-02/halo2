@@ -50,3 +50,6 @@ pub use helpers::SerdePrimeField;
 #[allow(unsafe_code)]
 #[cfg(feature = "gpu-accelerated")]
 pub mod icicle;
+
+/// zkInfer research profiling (no changes to cryptographic computations).
+pub mod profiler;
