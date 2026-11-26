@@ -352,11 +352,14 @@ where
             .map(|poly| vk.domain.lagrange_from_vec(poly)),
     );
 
+    let timer = crate::profiler::KeyTimer::start("fixed_coeff");
     let fixed_polys: Vec<_> = fixed
         .iter()
         .map(|poly| vk.domain.lagrange_to_coeff(poly.clone()))
         .collect();
 
+    drop(timer);
+    let timer = crate::profiler::KeyTimer::start("fixed_coset");
     let fixed_cosets: Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>> = fixed_polys
         .iter()
         .map(|poly| {
@@ -371,10 +374,12 @@ where
         })
         .collect();
 
+    drop(timer);
     let permutation_pk = assembly
         .permutation
         .build_pk(params, &vk.domain, &cs.permutation);
 
+    let timer = crate::profiler::KeyTimer::start("boundary_polynomials");
     // Compute l_0(X)
     // TODO: this can be done more efficiently
     let mut l0 = vk.domain.empty_lagrange();
@@ -435,6 +440,7 @@ where
         }
     });
 
+    drop(timer);
     // Compute the optimized evaluation data structure
     let ev = Evaluator::new(&vk.cs);
 

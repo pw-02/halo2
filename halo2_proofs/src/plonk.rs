@@ -423,13 +423,15 @@ where
     /// WITHOUT performing the expensive Montgomery reduction.
     /// Does so by first writing the verifying key and then serializing the rest of the data (in the form of field polynomials)
     pub fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()> {
-        self.vk.write(writer, format)?;
-        self.l0.write(writer, format)?;
-        self.l_last.write(writer, format)?;
-        self.l_active_row.write(writer, format)?;
-        write_polynomial_slice(&self.fixed_values, writer, format)?;
-        write_polynomial_slice(&self.fixed_polys, writer, format)?;
-        write_polynomial_slice(&self.fixed_cosets, writer, format)?;
+        use crate::profiler::key_write;
+        let scalar_len = C::Scalar::default().to_repr().as_ref().len();
+        key_write(writer, "vk", |w| self.vk.write(w, format), self.vk.bytes_length(format))?;
+        key_write(writer, "l0", |w| self.l0.write(w, format), 4 + scalar_len * self.l0.len())?;
+        key_write(writer, "l_last", |w| self.l_last.write(w, format), 4 + scalar_len * self.l_last.len())?;
+        key_write(writer, "l_active_row", |w| self.l_active_row.write(w, format), 4 + scalar_len * self.l_active_row.len())?;
+        key_write(writer, "fixed_lagrange", |w| write_polynomial_slice(&self.fixed_values, w, format), polynomial_slice_byte_length(&self.fixed_values))?;
+        key_write(writer, "fixed_coeff", |w| write_polynomial_slice(&self.fixed_polys, w, format), polynomial_slice_byte_length(&self.fixed_polys))?;
+        key_write(writer, "fixed_coset", |w| write_polynomial_slice(&self.fixed_cosets, w, format), polynomial_slice_byte_length(&self.fixed_cosets))?;
         self.permutation.write(writer, format)?;
         Ok(())
     }

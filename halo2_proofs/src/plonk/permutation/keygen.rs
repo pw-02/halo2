@@ -328,6 +328,7 @@ pub(crate) fn build_pk<'params, C: CurveAffine, P: Params<'params, C>>(
     p: &Argument,
     mapping: impl Fn(usize, usize) -> (usize, usize) + Sync,
 ) -> ProvingKey<C> {
+    let timer = crate::profiler::KeyTimer::start("permutation_lagrange");
     // Compute [omega^0, omega^1, ..., omega^{params.n - 1}]
     let mut omega_powers = vec![C::Scalar::ZERO; params.n() as usize];
     {
@@ -369,6 +370,8 @@ pub(crate) fn build_pk<'params, C: CurveAffine, P: Params<'params, C>>(
         });
     }
 
+    drop(timer);
+    let timer = crate::profiler::KeyTimer::start("permutation_coeff");
     let mut polys = vec![domain.empty_coeff(); p.columns.len()];
     {
         parallelize(&mut polys, |o, start| {
@@ -380,6 +383,8 @@ pub(crate) fn build_pk<'params, C: CurveAffine, P: Params<'params, C>>(
         });
     }
 
+    drop(timer);
+    let timer = crate::profiler::KeyTimer::start("permutation_coset");
     let mut cosets = vec![domain.empty_extended(); p.columns.len()];
     {
         parallelize(&mut cosets, |o, start| {
@@ -400,6 +405,7 @@ pub(crate) fn build_pk<'params, C: CurveAffine, P: Params<'params, C>>(
         });
     }
 
+    drop(timer);
     ProvingKey {
         permutations,
         polys,

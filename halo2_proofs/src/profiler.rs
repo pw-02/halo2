@@ -41,3 +41,41 @@ impl Drop for Phase {
         if self.active { event(self.name, "end", Some(self.start.elapsed().as_secs_f64())); stage("PROVING"); }
     }
 }
+
+ 
+/// Record key-specific metrics separately from admission-stage status.
+pub(crate) fn key_metric(component: &str, operation: &str, bytes: Option<u64>, seconds: f64) {
+    if !enabled() { return; }
+    let Some(p) = path("ZKINFER_HALO2_KEY_METRICS_FILE", "halo2_key_metrics.csv") else { return };
+    let exists = p.exists();
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(p) {
+        if !exists { let _ = writeln!(f, "component,operation,bytes,duration_s"); }
+        let bytes = bytes.map(|v| v.to_string()).unwrap_or_default();
+        let _ = writeln!(f, "{component},{operation},{bytes},{seconds:.9}");
+    }
+}
+
+/// Measure a serialization component without allocating a second copy.
+pub(crate) fn key_write<W: Write>(
+    writer: &mut W, component: &str,
+    write: impl FnOnce(&mut W) -> std::io::Result<()>,
+    bytes: usize,
+) -> std::io::Result<()> {
+    let start = Instant::now();
+    write(writer)?;
+    key_metric(component, "serialize", Some(bytes as u64), start.elapsed().as_secs_f64());
+    Ok(())
+}
+
+/// Time a key construction or reconstruction operation.
+pub(crate) struct KeyTimer { component: &'static str, start: Instant }
+impl KeyTimer {
+    pub(crate) fn start(component: &'static str) -> Self {
+        Self { component, start: Instant::now() }
+    }
+}
+impl Drop for KeyTimer {
+    fn drop(&mut self) {
+        key_metric(self.component, "keygen", None, self.start.elapsed().as_secs_f64());
+    }
+}

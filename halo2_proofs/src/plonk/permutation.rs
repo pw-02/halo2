@@ -155,9 +155,10 @@ where
         writer: &mut W,
         format: SerdeFormat,
     ) -> io::Result<()> {
-        write_polynomial_slice(&self.permutations, writer, format)?;
-        write_polynomial_slice(&self.polys, writer, format)?;
-        write_polynomial_slice(&self.cosets, writer, format)?;
+        use crate::profiler::key_write;
+        key_write(writer, "permutation_lagrange", |w| write_polynomial_slice(&self.permutations, w, format), polynomial_slice_byte_length(&self.permutations))?;
+        key_write(writer, "permutation_coeff", |w| write_polynomial_slice(&self.polys, w, format), polynomial_slice_byte_length(&self.polys))?;
+        key_write(writer, "permutation_coset", |w| write_polynomial_slice(&self.cosets, w, format), polynomial_slice_byte_length(&self.cosets))?;
         Ok(())
     }
 }
