@@ -143,7 +143,7 @@ where
         domain: &crate::poly::EvaluationDomain<C::Scalar>, count: usize,
     ) -> io::Result<Self> {
         use super::ProvingKeyRepresentation::*;
-        let permutations = read_polynomial_vec(reader, format)?;
+        let permutations = crate::profiler::key_read(reader, "permutation_lagrange", |r| read_polynomial_vec(r, format))?;
         let n = 1usize << domain.k();
         if representation != Full {
             super::validate_base_polys(&permutations, count, n)?;
@@ -151,13 +151,13 @@ where
         let polys = if representation == Compact {
             super::reconstruct_coeff::<C>(domain, &permutations, "permutation_coeff")
         } else {
-            read_polynomial_vec(reader, format)?
+            crate::profiler::key_read(reader, "permutation_coeff", |r| read_polynomial_vec(r, format))?
         };
         if representation != Full {
             super::validate_base_polys(&polys, count, n)?;
         }
         let cosets = if representation == Full {
-            read_polynomial_vec(reader, format)?
+            crate::profiler::key_read(reader, "permutation_coset", |r| read_polynomial_vec(r, format))?
         } else {
             super::reconstruct_cosets::<C>(domain, &polys, "permutation_coset")
         };

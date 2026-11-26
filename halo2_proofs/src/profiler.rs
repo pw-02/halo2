@@ -79,3 +79,33 @@ impl Drop for KeyTimer {
         key_metric(self.component, "keygen", None, self.start.elapsed().as_secs_f64());
     }
 }
+
+/// Count logical serialized bytes consumed by a successful component read.
+/// The underlying buffered reader remains responsible for physical I/O.
+pub(crate) fn key_read<R: std::io::Read, T>(
+    reader: &mut R, component: &str,
+    read: impl FnOnce(&mut CountingReader<'_, R>) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    let start = Instant::now();
+    let mut counted = CountingReader { inner: reader, bytes: 0 };
+    let value = read(&mut counted)?;
+    key_metric(component, "deserialize", Some(counted.bytes), start.elapsed().as_secs_f64());
+    Ok(value)
+}
+
+pub(crate) struct CountingReader<'a, R> {
+    inner: &'a mut R,
+    bytes: u64,
+}
+impl<R: std::io::Read> std::io::Read for CountingReader<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes += n as u64;
+        Ok(n)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> std::io::Result<()> {
+        self.inner.read_exact(buf)?;
+        self.bytes += buf.len() as u64;
+        Ok(())
+    }
+}

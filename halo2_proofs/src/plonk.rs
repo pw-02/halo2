@@ -531,6 +531,8 @@ where
         format: SerdeFormat,
         #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
     ) -> io::Result<Self> {
+        let materialize_start = std::time::Instant::now();
+        use crate::profiler::key_read;
         let mut first = [0u8; 1];
         reader.read_exact(&mut first)?;
         let (representation, prefix) = if first[0] == PK_MAGIC[0] {
@@ -552,18 +554,22 @@ where
         };
         let mut chained = io::Read::chain(io::Cursor::new(prefix), reader);
         let reader = &mut chained;
-        let vk = VerifyingKey::<C>::read::<_, ConcreteCircuit>(
-            reader,
+        let vk = key_read(reader, "vk", |r| VerifyingKey::<C>::read::<_, ConcreteCircuit>(
+            r,
             format,
             #[cfg(feature = "circuit-params")]
             params,
-        )?;
+        ))?;
         let boundary = if representation == ProvingKeyRepresentation::Compact {
             None
         } else {
-            Some((Polynomial::read(reader, format)?, Polynomial::read(reader, format)?, Polynomial::read(reader, format)?))
+            Some((
+                key_read(reader, "l0", |r| Polynomial::read(r, format))?,
+                key_read(reader, "l_last", |r| Polynomial::read(r, format))?,
+                key_read(reader, "l_active_row", |r| Polynomial::read(r, format))?,
+            ))
         };
-        let fixed_values = read_polynomial_vec(reader, format)?;
+        let fixed_values = key_read(reader, "fixed_lagrange", |r| read_polynomial_vec(r, format))?;
         let n = 1usize << vk.domain.k();
         if representation != ProvingKeyRepresentation::Full {
             validate_base_polys(&fixed_values, vk.fixed_commitments.len(), n)?;
@@ -571,13 +577,13 @@ where
         let fixed_polys = if representation == ProvingKeyRepresentation::Compact {
             reconstruct_coeff::<C>(&vk.domain, &fixed_values, "fixed_coeff")
         } else {
-            read_polynomial_vec(reader, format)?
+            key_read(reader, "fixed_coeff", |r| read_polynomial_vec(r, format))?
         };
         if representation != ProvingKeyRepresentation::Full {
             validate_base_polys(&fixed_polys, vk.fixed_commitments.len(), n)?;
         }
         let fixed_cosets = if representation == ProvingKeyRepresentation::Full {
-            read_polynomial_vec(reader, format)?
+            key_read(reader, "fixed_coset", |r| read_polynomial_vec(r, format))?
         } else {
             reconstruct_cosets::<C>(&vk.domain, &fixed_polys, "fixed_coset")
         };
@@ -599,7 +605,7 @@ where
             reader, format, representation, &vk.domain, vk.permutation.commitments().len(),
         )?;
         let ev = Evaluator::new(vk.cs());
-        Ok(Self {
+        let key = Self {
             vk,
             l0,
             l_last,
@@ -617,7 +623,14 @@ where
             icicle_l_active_row: Arc::new(icicle_l_active_row),
             permutation,
             ev,
-        })
+        };
+        let name = match representation {
+            ProvingKeyRepresentation::Full => "full",
+            ProvingKeyRepresentation::Reduced => "reduced",
+            ProvingKeyRepresentation::Compact => "compact",
+        };
+        crate::profiler::key_metric(name, "materialize", None, materialize_start.elapsed().as_secs_f64());
+        Ok(key)
     }
 
     /// Writes a proving key to a vector of bytes using [`Self::write`].
