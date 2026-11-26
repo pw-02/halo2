@@ -343,6 +343,59 @@ pub struct PinnedVerificationKey<'a, C: CurveAffine> {
     fixed_commitments: &'a Vec<C>,
     permutation: &'a permutation::VerifyingKey<C>,
 }
+/// Persistent representation of a proving key. The in-memory key is unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProvingKeyRepresentation {
+    /// All polynomial representations, in the legacy file format.
+    Full,
+    /// Omit extended-domain cosets.
+    Reduced,
+    /// Store only the VK and fixed/permutation Lagrange polynomials.
+    Compact,
+}
+
+// Distinct from the legacy VK version byte (0x03).
+const PK_MAGIC: &[u8; 5] = b"\xffPKR\x01";
+
+fn reconstruction<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let value = f();
+    crate::profiler::key_metric(name, "reconstruct", None, start.elapsed().as_secs_f64());
+    value
+}
+
+fn reconstruct_coeff<C: CurveAffine>(
+    domain: &EvaluationDomain<C::Scalar>,
+    values: &[Polynomial<C::Scalar, LagrangeCoeff>],
+    name: &str,
+) -> Vec<Polynomial<C::Scalar, Coeff>> {
+    reconstruction(name, || values.iter().map(|p| domain.lagrange_to_coeff(p.clone())).collect())
+}
+
+fn reconstruct_cosets<C: CurveAffine>(
+    domain: &EvaluationDomain<C::Scalar>,
+    values: &[Polynomial<C::Scalar, Coeff>],
+    name: &str,
+) -> Vec<Polynomial<C::Scalar, ExtendedLagrangeCoeff>> {
+    reconstruction(name, || values.iter().map(|p| {
+        #[cfg(feature = "gpu-accelerated")]
+        { domain.coeff_to_extended(p, &IcicleStream::default()) }
+        #[cfg(not(feature = "gpu-accelerated"))]
+        { domain.coeff_to_extended(p) }
+    }).collect())
+}
+
+fn validate_base_polys<F: Field, B>(
+    values: &[Polynomial<F, B>],
+    count: usize,
+    n: usize,
+) -> io::Result<()> {
+    if values.len() != count || values.iter().any(|p| p.len() != n) {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid proving-key polynomial dimensions"));
+    }
+    Ok(())
+}
+
 /// This is a proving key which allows for the creation of proofs for a
 /// particular circuit.
 #[derive(Clone)]
@@ -423,16 +476,42 @@ where
     /// WITHOUT performing the expensive Montgomery reduction.
     /// Does so by first writing the verifying key and then serializing the rest of the data (in the form of field polynomials)
     pub fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) -> io::Result<()> {
+        self.write_with_representation(writer, format, ProvingKeyRepresentation::Full)
+    }
+
+    /// Writes a full, reduced or compact key. Reduced and compact files carry a
+    /// versioned header; full files retain the legacy format.
+    pub fn write_with_representation<W: io::Write>(
+        &self, writer: &mut W, format: SerdeFormat, representation: ProvingKeyRepresentation,
+    ) -> io::Result<()> {
         use crate::profiler::key_write;
+        if representation != ProvingKeyRepresentation::Full {
+            writer.write_all(PK_MAGIC)?;
+            writer.write_all(&[match representation {
+                ProvingKeyRepresentation::Reduced => 1,
+                ProvingKeyRepresentation::Compact => 2,
+                ProvingKeyRepresentation::Full => unreachable!(),
+            }])?;
+        }
         let scalar_len = C::Scalar::default().to_repr().as_ref().len();
         key_write(writer, "vk", |w| self.vk.write(w, format), self.vk.bytes_length(format))?;
-        key_write(writer, "l0", |w| self.l0.write(w, format), 4 + scalar_len * self.l0.len())?;
-        key_write(writer, "l_last", |w| self.l_last.write(w, format), 4 + scalar_len * self.l_last.len())?;
-        key_write(writer, "l_active_row", |w| self.l_active_row.write(w, format), 4 + scalar_len * self.l_active_row.len())?;
+        if representation != ProvingKeyRepresentation::Compact {
+            key_write(writer, "l0", |w| self.l0.write(w, format), 4 + scalar_len * self.l0.len())?;
+        }
+        if representation != ProvingKeyRepresentation::Compact {
+            key_write(writer, "l_last", |w| self.l_last.write(w, format), 4 + scalar_len * self.l_last.len())?;
+        }
+        if representation != ProvingKeyRepresentation::Compact {
+            key_write(writer, "l_active_row", |w| self.l_active_row.write(w, format), 4 + scalar_len * self.l_active_row.len())?;
+        }
         key_write(writer, "fixed_lagrange", |w| write_polynomial_slice(&self.fixed_values, w, format), polynomial_slice_byte_length(&self.fixed_values))?;
-        key_write(writer, "fixed_coeff", |w| write_polynomial_slice(&self.fixed_polys, w, format), polynomial_slice_byte_length(&self.fixed_polys))?;
-        key_write(writer, "fixed_coset", |w| write_polynomial_slice(&self.fixed_cosets, w, format), polynomial_slice_byte_length(&self.fixed_cosets))?;
-        self.permutation.write(writer, format)?;
+        if representation != ProvingKeyRepresentation::Compact {
+            key_write(writer, "fixed_coeff", |w| write_polynomial_slice(&self.fixed_polys, w, format), polynomial_slice_byte_length(&self.fixed_polys))?;
+        }
+        if representation == ProvingKeyRepresentation::Full {
+            key_write(writer, "fixed_coset", |w| write_polynomial_slice(&self.fixed_cosets, w, format), polynomial_slice_byte_length(&self.fixed_cosets))?;
+        }
+        self.permutation.write(writer, format, representation)?;
         Ok(())
     }
 
@@ -452,18 +531,60 @@ where
         format: SerdeFormat,
         #[cfg(feature = "circuit-params")] params: ConcreteCircuit::Params,
     ) -> io::Result<Self> {
-        let vk = VerifyingKey::<C>::read::<R, ConcreteCircuit>(
+        let mut first = [0u8; 1];
+        reader.read_exact(&mut first)?;
+        let (representation, prefix) = if first[0] == PK_MAGIC[0] {
+            let mut rest = [0u8; 5];
+            reader.read_exact(&mut rest)?;
+            if rest[..4] != PK_MAGIC[1..] {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown proving-key header"));
+            }
+            let representation = match rest[4] {
+                1 => ProvingKeyRepresentation::Reduced,
+                2 => ProvingKeyRepresentation::Compact,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown proving-key representation")),
+            };
+            (representation, Vec::new())
+        } else if first[0] == VERSION {
+            (ProvingKeyRepresentation::Full, first.to_vec())
+        } else {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "unknown proving-key version"));
+        };
+        let mut chained = io::Read::chain(io::Cursor::new(prefix), reader);
+        let reader = &mut chained;
+        let vk = VerifyingKey::<C>::read::<_, ConcreteCircuit>(
             reader,
             format,
             #[cfg(feature = "circuit-params")]
             params,
         )?;
-        let l0 = Polynomial::read(reader, format)?;
-        let l_last = Polynomial::read(reader, format)?;
-        let l_active_row = Polynomial::read(reader, format)?;
+        let boundary = if representation == ProvingKeyRepresentation::Compact {
+            None
+        } else {
+            Some((Polynomial::read(reader, format)?, Polynomial::read(reader, format)?, Polynomial::read(reader, format)?))
+        };
         let fixed_values = read_polynomial_vec(reader, format)?;
-        let fixed_polys = read_polynomial_vec(reader, format)?;
-        let fixed_cosets = read_polynomial_vec(reader, format)?;
+        let n = 1usize << vk.domain.k();
+        if representation != ProvingKeyRepresentation::Full {
+            validate_base_polys(&fixed_values, vk.fixed_commitments.len(), n)?;
+        }
+        let fixed_polys = if representation == ProvingKeyRepresentation::Compact {
+            reconstruct_coeff::<C>(&vk.domain, &fixed_values, "fixed_coeff")
+        } else {
+            read_polynomial_vec(reader, format)?
+        };
+        if representation != ProvingKeyRepresentation::Full {
+            validate_base_polys(&fixed_polys, vk.fixed_commitments.len(), n)?;
+        }
+        let fixed_cosets = if representation == ProvingKeyRepresentation::Full {
+            read_polynomial_vec(reader, format)?
+        } else {
+            reconstruct_cosets::<C>(&vk.domain, &fixed_polys, "fixed_coset")
+        };
+        let (l0, l_last, l_active_row) = match boundary {
+            Some(values) => values,
+            None => reconstruction("boundary_polynomials", || keygen::boundary_polynomials(&vk.domain, vk.cs.blinding_factors())),
+        };
 
         #[cfg(feature = "gpu-accelerated")]
         let icicle_fixed = device_vec_from_poly_vec::<C, ExtendedLagrangeCoeff>(&fixed_cosets, &IcicleStream::default());
@@ -474,7 +595,9 @@ where
         #[cfg(feature = "gpu-accelerated")]
         let icicle_l_active_row = device_vec_from_c_scalars(&l_active_row.as_ref(), &IcicleStream::default());
 
-        let permutation = permutation::ProvingKey::read(reader, format)?;
+        let permutation = permutation::ProvingKey::read(
+            reader, format, representation, &vk.domain, vk.permutation.commitments().len(),
+        )?;
         let ev = Evaluator::new(vk.cs());
         Ok(Self {
             vk,

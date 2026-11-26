@@ -138,10 +138,29 @@ where
     C::Scalar: SerdePrimeField,
 {
     /// Reads proving key for a single permutation argument from buffer using `Polynomial::read`.  
-    pub(super) fn read<R: io::Read>(reader: &mut R, format: SerdeFormat) -> io::Result<Self> {
+    pub(super) fn read<R: io::Read>(
+        reader: &mut R, format: SerdeFormat, representation: super::ProvingKeyRepresentation,
+        domain: &crate::poly::EvaluationDomain<C::Scalar>, count: usize,
+    ) -> io::Result<Self> {
+        use super::ProvingKeyRepresentation::*;
         let permutations = read_polynomial_vec(reader, format)?;
-        let polys = read_polynomial_vec(reader, format)?;
-        let cosets = read_polynomial_vec(reader, format)?;
+        let n = 1usize << domain.k();
+        if representation != Full {
+            super::validate_base_polys(&permutations, count, n)?;
+        }
+        let polys = if representation == Compact {
+            super::reconstruct_coeff::<C>(domain, &permutations, "permutation_coeff")
+        } else {
+            read_polynomial_vec(reader, format)?
+        };
+        if representation != Full {
+            super::validate_base_polys(&polys, count, n)?;
+        }
+        let cosets = if representation == Full {
+            read_polynomial_vec(reader, format)?
+        } else {
+            super::reconstruct_cosets::<C>(domain, &polys, "permutation_coset")
+        };
         Ok(ProvingKey {
             permutations,
             polys,
@@ -154,11 +173,17 @@ where
         &self,
         writer: &mut W,
         format: SerdeFormat,
+        representation: super::ProvingKeyRepresentation,
     ) -> io::Result<()> {
         use crate::profiler::key_write;
+        use super::ProvingKeyRepresentation::*;
         key_write(writer, "permutation_lagrange", |w| write_polynomial_slice(&self.permutations, w, format), polynomial_slice_byte_length(&self.permutations))?;
-        key_write(writer, "permutation_coeff", |w| write_polynomial_slice(&self.polys, w, format), polynomial_slice_byte_length(&self.polys))?;
-        key_write(writer, "permutation_coset", |w| write_polynomial_slice(&self.cosets, w, format), polynomial_slice_byte_length(&self.cosets))?;
+        if representation != Compact {
+            key_write(writer, "permutation_coeff", |w| write_polynomial_slice(&self.polys, w, format), polynomial_slice_byte_length(&self.polys))?;
+        }
+        if representation == Full {
+            key_write(writer, "permutation_coset", |w| write_polynomial_slice(&self.cosets, w, format), polynomial_slice_byte_length(&self.cosets))?;
+        }
         Ok(())
     }
 }

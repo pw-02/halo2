@@ -574,12 +574,25 @@ fn plonk_api() {
         bad_keys!(Scheme);
 
         let params = ParamsKZG::<Bn256>::new(K);
-        let rng = OsRng;
-
         let pk = keygen::<KZGCommitmentScheme<_>>(&params);
-
-        let proof = create_proof::<_, ProverSHPLONK<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
-            rng, &params, &pk,
+        use halo2_proofs::{plonk::ProvingKeyRepresentation, SerdeFormat};
+        use halo2curves::bn256::{Fr, G1Affine};
+        let format = SerdeFormat::RawBytes;
+        let full = pk.to_bytes(format);
+        let mut sizes = Vec::new();
+        for representation in [ProvingKeyRepresentation::Full, ProvingKeyRepresentation::Reduced, ProvingKeyRepresentation::Compact] {
+            let mut encoded = Vec::new();
+            pk.write_with_representation(&mut encoded, format, representation).unwrap();
+            sizes.push(encoded.len());
+            let restored = ProvingKey::<G1Affine>::from_bytes::<MyCircuit<Fr>>(
+                &encoded, format,
+                #[cfg(feature = "circuit-params")]
+                (),
+            ).unwrap();
+            assert_eq!(restored.to_bytes(format), full);
+            let rng = OsRng;
+            let proof = create_proof::<_, ProverSHPLONK<_>, _, _, Blake2bWrite<_, _, Challenge255<_>>>(
+            rng, &params, &restored,
         );
 
         let verifier_params = params.verifier_params();
@@ -591,6 +604,8 @@ fn plonk_api() {
             Blake2bRead<_, _, Challenge255<_>>,
             AccumulatorStrategy<_>,
         >(verifier_params, pk.get_vk(), &proof[..]);
+        }
+        assert!(sizes[0] > sizes[1] && sizes[1] > sizes[2]);
     }
 
     fn test_plonk_api_ipa() {
