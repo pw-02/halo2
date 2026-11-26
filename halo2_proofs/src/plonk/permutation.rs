@@ -2,7 +2,7 @@
 
 use super::circuit::{Any, Column};
 use crate::{
-    arithmetic::CurveAffine,
+    arithmetic::{parallelize, CurveAffine},
     helpers::{
         polynomial_slice_byte_length, read_polynomial_vec, write_polynomial_slice,
         SerdeCurveAffine, SerdePrimeField,
@@ -18,6 +18,24 @@ pub(crate) mod verifier;
 pub use keygen::Assembly;
 
 use std::io;
+
+#[cfg(feature = "gpu-accelerated")]
+use icicle_runtime::stream::IcicleStream;
+
+// Match the outer polynomial-level parallelism used during permutation keygen.
+// Empty slots avoid allocating an additional full set of zero-filled polynomials.
+fn parallel_transform<T: Send>(count: usize, transform: impl Fn(usize) -> T + Send + Sync) -> Vec<T> {
+    let mut output: Vec<Option<T>> = (0..count).map(|_| None).collect();
+    if count != 0 {
+        let transform = &transform;
+        parallelize(&mut output, |chunk, start| {
+            for (i, slot) in chunk.iter_mut().enumerate() {
+                *slot = Some(transform(start + i));
+            }
+        });
+    }
+    output.into_iter().map(|slot| slot.expect("parallel transform filled every slot")).collect()
+}
 
 /// A permutation argument.
 #[derive(Debug, Clone)]
@@ -149,7 +167,11 @@ where
             super::validate_base_polys(&permutations, count, n)?;
         }
         let polys = if representation == Compact {
-            super::reconstruct_coeff::<C>(domain, &permutations, "permutation_coeff")
+            super::reconstruction("permutation_coeff", || {
+                parallel_transform(permutations.len(), |i| {
+                    domain.lagrange_to_coeff(permutations[i].clone())
+                })
+            })
         } else {
             crate::profiler::key_read(reader, "permutation_coeff", |r| read_polynomial_vec(r, format))?
         };
@@ -159,7 +181,14 @@ where
         let cosets = if representation == Full {
             crate::profiler::key_read(reader, "permutation_coset", |r| read_polynomial_vec(r, format))?
         } else {
-            super::reconstruct_cosets::<C>(domain, &polys, "permutation_coset")
+            super::reconstruction("permutation_coset", || {
+                parallel_transform(polys.len(), |i| {
+                    #[cfg(feature = "gpu-accelerated")]
+                    { domain.coeff_to_extended(&polys[i], &IcicleStream::default()) }
+                    #[cfg(not(feature = "gpu-accelerated"))]
+                    { domain.coeff_to_extended(&polys[i]) }
+                })
+            })
         };
         Ok(ProvingKey {
             permutations,
@@ -194,5 +223,18 @@ impl<C: CurveAffine> ProvingKey<C> {
         polynomial_slice_byte_length(&self.permutations)
             + polynomial_slice_byte_length(&self.polys)
             + polynomial_slice_byte_length(&self.cosets)
+    }
+}
+
+#[cfg(test)]
+mod reconstruction_tests {
+    use super::parallel_transform;
+
+    #[test]
+    fn parallel_transform_preserves_order_and_handles_empty_input() {
+        for count in [0, 1, 3, 17, 101] {
+            assert_eq!(parallel_transform(count, |i| i * 2),
+                       (0..count).map(|i| i * 2).collect::<Vec<_>>());
+        }
     }
 }
